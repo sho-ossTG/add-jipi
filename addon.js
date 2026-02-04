@@ -15,7 +15,6 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Minimal catalog entry so you can find it in Stremio
 builder.defineCatalogHandler(async (args) => {
   if (args.type !== "series" || args.id !== "onepiece_catalog") {
     return { metas: [] };
@@ -33,6 +32,12 @@ builder.defineCatalogHandler(async (args) => {
   };
 });
 
+function cleanTitle(filename) {
+  const name = String(filename || "").trim();
+  if (!name) return "";
+  return name.replace(/\.mp4$/i, "");
+}
+
 async function callBrokerResolve(episodeId) {
   if (!B_BASE_URL) {
     throw new Error("Missing B_BASE_URL");
@@ -42,11 +47,10 @@ async function callBrokerResolve(episodeId) {
   u.searchParams.set("episode", episodeId);
 
   const r = await fetch(u.toString(), { method: "GET" });
-  const text = await r.text();
 
   let data;
   try {
-    data = JSON.parse(text);
+    data = await r.json();
   } catch {
     throw new Error("Broker returned non-JSON response");
   }
@@ -60,27 +64,29 @@ async function callBrokerResolve(episodeId) {
     throw new Error("Broker returned missing url");
   }
 
-  return data.url;
+  const filename = data && typeof data.filename === "string" ? data.filename : "";
+  return { url: data.url, filename };
 }
 
 builder.defineStreamHandler(async (args) => {
   try {
-    // args.id for series episodes comes like: "tt0388629:1:2"
     const episodeId = String(args.id || "").trim();
     if (!episodeId) return { streams: [] };
 
-    const directUrl = await callBrokerResolve(episodeId);
+    const { url, filename } = await callBrokerResolve(episodeId);
+
+    const title = cleanTitle(filename) || "Resolved via Jipi";
 
     return {
       streams: [
         {
-          title: "Resolved via Jipi",
-          url: directUrl,
+          title,
+          url,
           behaviorHints: { notWebReady: true }
         }
       ]
     };
-  } catch (e) {
+  } catch {
     return { streams: [] };
   }
 });
