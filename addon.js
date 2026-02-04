@@ -1,122 +1,122 @@
 const { addonBuilder } = require("stremio-addon-sdk");
-const magnet = require("magnet-uri");
 const { execFile } = require("child_process");
 const path = require("path");
 
+const RESOLVER_BASE_URL = process.env.RESOLVER_BASE_URL || "";
+
+/*
+  Map Stremio episode IDs -> Google Drive FILE ID
+  Example Stremio id for series episode: "tt0388629:1:1" (One Piece S1E1)
+
+  From a file link like:
+  https://drive.google.com/file/d/FILE_ID/view
+*/
+const EP_TO_DRIVE_FILE_ID = {
+  // "tt0388629:1:1": "PASTE_FILE_ID_HERE",
+  // "tt0388629:1:2": "PASTE_FILE_ID_HERE"
+};
+
 const manifest = {
-  id: "org.stremio.helloworld",
+  id: "org.stremio.onepiece.jipi",
   version: "1.0.0",
-  name: "Hello World Addon",
-  description: "Sample addon providing a few public domain movies",
+  name: "One Piece",
+  description: "One Piece",
   resources: ["catalog", "stream"],
-  types: ["movie", "series"],
-  catalogs: [
-    { type: "movie", id: "helloworldmovies" },
-    { type: "series", id: "helloworldseries" }
-  ],
+  types: ["series"],
+  catalogs: [{ type: "series", id: "onepiece_catalog", name: "One Piece" }],
   idPrefixes: ["tt"]
 };
 
-const dataset = {
-  "tt0032138": { name: "The Wizard of Oz", type: "movie", infoHash: "24c8802e2624e17d46cd555f364debd949f2c81e", fileIdx: 0 },
-  "tt0017136": { name: "Metropolis", type: "movie", infoHash: "dca926c0328bb54d209d82dc8a2f391617b47d7a", fileIdx: 1 },
-  "tt0063350": fromMagnet("Night of the Living Dead", "movie",
-    "magnet:?xt=urn:btih:A7CFBB7840A8B67FD735AC73A373302D14A7CDC9"),
-  "tt0051744": { name: "House on Haunted Hill", type: "movie", infoHash: "9f86563ce2ed86bbfedd5d3e9f4e55aedd660960" },
-  "tt1254207": { name: "Big Buck Bunny", type: "movie", url: "http://clips.vorwaerts-gmbh.de/big_buck_bunny.mp4" },
-
-  // THIS ONE USES yt-dlp
-  "tt0031051": { name: "The Arizona Kid", type: "movie", ytId: "m3BKVSpP80s" }
-};
-
-function fromMagnet(name, type, uri) {
-  const parsed = magnet.decode(uri);
-  const infoHash = parsed.infoHash.toLowerCase();
-  return {
-    name,
-    type,
-    infoHash,
-    sources: (parsed.announce || []).map(x => "tracker:" + x).concat(["dht:" + infoHash])
-  };
-}
-
 const builder = new addonBuilder(manifest);
 
-function runYtDlpGetUrl(inputUrl) {
+function runLocalYtDlpGetUrl(inputUrl) {
   return new Promise((resolve, reject) => {
-    const ytdlpPath = path.join(__dirname, "bin", "yt-dlp");
+    const ytdlpPath = path.join(__dirname, "bin", "dlp-jipi");
 
     const args = [
-      "-g",
       "--no-playlist",
+      "--no-warnings",
+      "--quiet",
       "-f",
       "bv*+ba/b",
+      "-g",
       inputUrl
     ];
 
     execFile(ytdlpPath, args, { timeout: 20000 }, (err, stdout, stderr) => {
       if (err) {
-        reject(new Error(stderr || err.message));
+        reject(new Error((stderr || err.message || String(err)).slice(0, 600)));
         return;
       }
-      const directUrl = String(stdout).trim().split("\n")[0];
-      resolve(directUrl);
+      const directUrl = String(stdout).trim().split("\n").filter(Boolean)[0];
+      resolve(directUrl || "");
     });
   });
 }
 
-builder.defineStreamHandler(async function (args) {
-  const item = dataset[args.id];
-  if (!item) return { streams: [] };
+async function resolveWithServerB(inputUrl) {
+  if (!RESOLVER_BASE_URL) return "";
 
-  if (item.ytId) {
-    const ytUrl = `https://www.youtube.com/watch?v=${item.ytId}`;
+  const u = new URL("/resolve", RESOLVER_BASE_URL);
+  u.searchParams.set("url", inputUrl);
 
-    try {
-      const directUrl = await runYtDlpGetUrl(ytUrl);
+  const res = await fetch(u.toString());
+  if (!res.ok) return "";
 
-      return {
-        streams: [
-          {
-            title: "YouTube via yt-dlp",
-            url: directUrl
-          }
-        ]
-      };
-    } catch (e) {
-      return {
-        streams: [
-          {
-            title: "yt-dlp ERROR",
-            url: "about:blank",
-            behaviorHints: { notWebReady: true }
-          }
-        ]
-      };
-    }
-  }
+  const data = await res.json().catch(() => null);
+  if (!data || typeof data.url !== "string") return "";
 
-  return { streams: [item] };
-});
-
-const METAHUB_URL = "https://images.metahub.space";
-
-function generateMetaPreview(value, key) {
-  const imdbId = key.split(":")[0];
-  return {
-    id: imdbId,
-    type: value.type,
-    name: value.name,
-    poster: METAHUB_URL + "/poster/medium/" + imdbId + "/img"
-  };
+  return data.url;
 }
 
-builder.defineCatalogHandler(function (args) {
-  const metas = Object.entries(dataset)
-    .filter(([_, value]) => value.type === args.type)
-    .map(([key, value]) => generateMetaPreview(value, key));
+builder.defineCatalogHandler(async function (args) {
+  if (args.type !== "series" || args.id !== "onepiece_catalog") {
+    return { metas: [] };
+  }
 
-  return Promise.resolve({ metas });
+  return {
+    metas: [
+      {
+        id: "tt0388629",
+        type: "series",
+        name: "One Piece"
+      }
+    ]
+  };
+});
+
+builder.defineStreamHandler(async function (args) {
+  const id = String(args.id || "");
+  if (!id.startsWith("tt0388629")) return { streams: [] };
+
+  const fileId = EP_TO_DRIVE_FILE_ID[id];
+  if (!fileId) return { streams: [] };
+
+  const driveUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
+
+  try {
+    // Prefer Server B if configured
+    let directUrl = await resolveWithServerB(driveUrl);
+
+    // Fallback to local yt-dlp if Server B is not set or failed
+    if (!directUrl) {
+      directUrl = await runLocalYtDlpGetUrl(driveUrl);
+    }
+
+    if (!directUrl) return { streams: [] };
+
+    return {
+      streams: [
+        {
+          title: "One Piece",
+          url: directUrl,
+          behaviorHints: { notWebReady: true }
+        }
+      ]
+    };
+  } catch {
+    return { streams: [] };
+  }
 });
 
 module.exports = builder.getInterface();
