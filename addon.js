@@ -1,75 +1,22 @@
 const { addonBuilder } = require("stremio-addon-sdk");
-const { execFile } = require("child_process");
-const path = require("path");
 
-const RESOLVER_BASE_URL = process.env.RESOLVER_BASE_URL || "";
-
-/*
-  Map Stremio episode IDs -> Google Drive FILE ID
-  Example Stremio id for series episode: "tt0388629:1:1" (One Piece S1E1)
-
-  From a file link like:
-  https://drive.google.com/file/d/FILE_ID/view
-*/
-const EP_TO_DRIVE_FILE_ID = {
-  // "tt0388629:1:1": "PASTE_FILE_ID_HERE",
-  // "tt0388629:1:2": "PASTE_FILE_ID_HERE"
-};
+const B_BASE_URL = process.env.B_BASE_URL || "";
 
 const manifest = {
-  id: "org.stremio.onepiece.jipi",
+  id: "org.jipi.onepiece",
   version: "1.0.0",
-  name: "One Piece",
-  description: "One Piece",
+  name: "One Piece (Jipi)",
+  description: "Streams resolved via Broker (B) and Worker (C)",
   resources: ["catalog", "stream"],
   types: ["series"],
-  catalogs: [{ type: "series", id: "onepiece_catalog", name: "One Piece" }],
+  catalogs: [{ type: "series", id: "onepiece_catalog" }],
   idPrefixes: ["tt"]
 };
 
 const builder = new addonBuilder(manifest);
 
-function runLocalYtDlpGetUrl(inputUrl) {
-  return new Promise((resolve, reject) => {
-    const ytdlpPath = path.join(__dirname, "bin", "dlp-jipi");
-
-    const args = [
-      "--no-playlist",
-      "--no-warnings",
-      "--quiet",
-      "-f",
-      "bv*+ba/b",
-      "-g",
-      inputUrl
-    ];
-
-    execFile(ytdlpPath, args, { timeout: 20000 }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error((stderr || err.message || String(err)).slice(0, 600)));
-        return;
-      }
-      const directUrl = String(stdout).trim().split("\n").filter(Boolean)[0];
-      resolve(directUrl || "");
-    });
-  });
-}
-
-async function resolveWithServerB(inputUrl) {
-  if (!RESOLVER_BASE_URL) return "";
-
-  const u = new URL("/resolve", RESOLVER_BASE_URL);
-  u.searchParams.set("url", inputUrl);
-
-  const res = await fetch(u.toString());
-  if (!res.ok) return "";
-
-  const data = await res.json().catch(() => null);
-  if (!data || typeof data.url !== "string") return "";
-
-  return data.url;
-}
-
-builder.defineCatalogHandler(async function (args) {
+// Minimal catalog entry so you can find it in Stremio
+builder.defineCatalogHandler(async (args) => {
   if (args.type !== "series" || args.id !== "onepiece_catalog") {
     return { metas: [] };
   }
@@ -79,42 +26,61 @@ builder.defineCatalogHandler(async function (args) {
       {
         id: "tt0388629",
         type: "series",
-        name: "One Piece"
+        name: "One Piece",
+        poster: "https://images.metahub.space/poster/medium/tt0388629/img"
       }
     ]
   };
 });
 
-builder.defineStreamHandler(async function (args) {
-  const id = String(args.id || "");
-  if (!id.startsWith("tt0388629")) return { streams: [] };
+async function callBrokerResolve(episodeId) {
+  if (!B_BASE_URL) {
+    throw new Error("Missing B_BASE_URL");
+  }
 
-  const fileId = EP_TO_DRIVE_FILE_ID[id];
-  if (!fileId) return { streams: [] };
+  const u = new URL("/api/resolve", B_BASE_URL);
+  u.searchParams.set("episode", episodeId);
 
-  const driveUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
+  const r = await fetch(u.toString(), { method: "GET" });
+  const text = await r.text();
 
+  let data;
   try {
-    // Prefer Server B if configured
-    let directUrl = await resolveWithServerB(driveUrl);
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Broker returned non-JSON response");
+  }
 
-    // Fallback to local yt-dlp if Server B is not set or failed
-    if (!directUrl) {
-      directUrl = await runLocalYtDlpGetUrl(driveUrl);
-    }
+  if (!r.ok) {
+    const msg = data && data.error ? data.error : "Broker error";
+    throw new Error(msg);
+  }
 
-    if (!directUrl) return { streams: [] };
+  if (!data.url || typeof data.url !== "string") {
+    throw new Error("Broker returned missing url");
+  }
+
+  return data.url;
+}
+
+builder.defineStreamHandler(async (args) => {
+  try {
+    // args.id for series episodes comes like: "tt0388629:1:2"
+    const episodeId = String(args.id || "").trim();
+    if (!episodeId) return { streams: [] };
+
+    const directUrl = await callBrokerResolve(episodeId);
 
     return {
       streams: [
         {
-          title: "One Piece",
+          title: "Resolved via Jipi",
           url: directUrl,
           behaviorHints: { notWebReady: true }
         }
       ]
     };
-  } catch {
+  } catch (e) {
     return { streams: [] };
   }
 });
