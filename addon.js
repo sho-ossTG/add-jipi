@@ -68,20 +68,26 @@ async function callBrokerResolve(episodeId) {
   return { url: data.url, filename };
 }
 
+async function resolveEpisode(episodeId) {
+  const id = String(episodeId || "").trim();
+  if (!id) {
+    throw new Error("Missing episode id");
+  }
+
+  const { url, filename } = await callBrokerResolve(id);
+  const title = cleanTitle(filename) || "Resolved via Jipi";
+  return { url, filename, title, episodeId: id };
+}
+
 builder.defineStreamHandler(async (args) => {
   try {
-    const episodeId = String(args.id || "").trim();
-    if (!episodeId) return { streams: [] };
-
-    const { url, filename } = await callBrokerResolve(episodeId);
-
-    const title = cleanTitle(filename) || "Resolved via Jipi";
+    const resolved = await resolveEpisode(args.id);
 
     return {
       streams: [
         {
-          title,
-          url,
+          title: resolved.title,
+          url: resolved.url,
           behaviorHints: { notWebReady: true }
         }
       ]
@@ -91,4 +97,7 @@ builder.defineStreamHandler(async (args) => {
   }
 });
 
-module.exports = builder.getInterface();
+const addonInterface = builder.getInterface();
+addonInterface.resolveEpisode = resolveEpisode;
+
+module.exports = addonInterface;
