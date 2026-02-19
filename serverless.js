@@ -162,6 +162,10 @@ function getLandingPageHtml() {
         }
         .manifest-link:hover { color: #fff; text-decoration: underline; }
     </style>
+    <script>
+        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
     <div class="container">
