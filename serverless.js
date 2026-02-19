@@ -331,6 +331,10 @@ async function handleQuarantine(res) {
           <tbody>${rows || "<tr><td colspan='4' style='padding:20px;text-align:center'>No events</td></tr>"}</tbody>
         </table>
         <br><a href="/" style="color:#8A5BB8">Back to Home</a>
+        <script>
+          window.si = window.si || function(){(window.si.q=window.si.q||[]).push(arguments)};
+        </script>
+        <script defer src="/_vercel/speed-insights/script.js"></script>
       </body>
     </html>
   `;
