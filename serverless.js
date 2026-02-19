@@ -150,6 +150,10 @@ function getLandingPageHtml() {
         .nav-links { margin-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; }
         .nav-links a { color: #8A5BB8; text-decoration: none; margin: 0 10px; font-size: 0.8rem; }
     </style>
+    <script>
+        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
     <div class="container">
