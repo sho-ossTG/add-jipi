@@ -9,6 +9,9 @@ const INACTIVITY_LIMIT = 20 * 60;
 const ACTIVE_URL_TTL = 3600 * 2; 
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const NEUTRAL_ORIGIN = "https://www.google.com/";
+
 function getRedisConfig() {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "";
@@ -104,13 +107,26 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function formatStream(title, url) {
+  return {
+    title: title,
+    url: url,
+    behaviorHints: {
+      notWebReady: false,
+      proxyHeaders: {
+        request: {
+          "User-Agent": BROWSER_UA,
+          "Referer": NEUTRAL_ORIGIN,
+          "Origin": NEUTRAL_ORIGIN
+        }
+      }
+    }
+  };
+}
+
 function sendErrorStream(res, title) {
   sendJson(res, 200, {
-    streams: [{
-      title: `⚠️ ${title}`,
-      url: TEST_VIDEO_URL,
-      behaviorHints: { notWebReady: true }
-    }]
+    streams: [formatStream(`⚠️ ${title}`, TEST_VIDEO_URL)]
   });
 }
 
@@ -222,11 +238,7 @@ async function handleStreamRequest(res, pathname, ip) {
       if (existing.episodeId === episodeId) {
         await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
         sendJson(res, 200, {
-          streams: [{
-            title: existing.title || "Resolved via Jipi",
-            url: existing.url,
-            behaviorHints: { notWebReady: true }
-          }]
+          streams: [formatStream(existing.title || "Resolved via Jipi", existing.url)]
         });
         return true;
       }
@@ -236,8 +248,20 @@ async function handleStreamRequest(res, pathname, ip) {
   // Resolve via B
   try {
     const resolved = await addonInterface.resolveEpisode(episodeId);
+    let finalUrl = resolved.url || "";
+    
+    // Enforce HTTPS
+    if (finalUrl.startsWith("http://")) {
+      finalUrl = finalUrl.replace("http://", "https://");
+    }
+
+    if (!finalUrl.startsWith("https://")) {
+      sendErrorStream(res, "ERROR: Resolved URL is not HTTPS (Incompatible with Desktop/TV).");
+      return true;
+    }
+
     const payload = {
-      url: resolved.url,
+      url: finalUrl,
       episodeId,
       title: resolved.title,
       updatedAt: Date.now()
@@ -247,11 +271,7 @@ async function handleStreamRequest(res, pathname, ip) {
     await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
 
     sendJson(res, 200, {
-      streams: [{
-        title: resolved.title || "Resolved via Jipi",
-        url: resolved.url,
-        behaviorHints: { notWebReady: true }
-      }]
+      streams: [formatStream(resolved.title || "Resolved via Jipi", finalUrl)]
     });
     return true;
   } catch (err) {
