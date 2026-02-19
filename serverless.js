@@ -146,6 +146,10 @@ function getLandingPageHtml() {
             <a href="/quarantine">Quarantine Logs</a>
         </div>
     </div>
+    <script>
+        window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/speed-insights/script.js"></script>
 </body>
 </html>
   `.trim();
