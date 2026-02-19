@@ -4,9 +4,10 @@ const addonInterface = require("./addon");
 const router = getRouter(addonInterface);
 
 // Constants
-const SLOT_TTL = 3600; // 1 hour rolling
-const INACTIVITY_LIMIT = 20 * 60; // 20 minutes
-const ACTIVE_URL_TTL = 3600 * 2; // 2 hours (enough to survive inactivity for cleanup)
+const SLOT_TTL = 3600; 
+const INACTIVITY_LIMIT = 20 * 60; 
+const ACTIVE_URL_TTL = 3600 * 2; 
+const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
 function getRedisConfig() {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
@@ -103,6 +104,16 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function sendErrorStream(res, title) {
+  sendJson(res, 200, {
+    streams: [{
+      title: `⚠️ ${title}`,
+      url: TEST_VIDEO_URL,
+      behaviorHints: { notWebReady: true }
+    }]
+  });
+}
+
 function getLandingPageHtml() {
   return `
 <!DOCTYPE html>
@@ -112,55 +123,16 @@ function getLandingPageHtml() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>One Piece (Jipi) - Stremio Addon</title>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('https://dl.strem.io/addon-background.jpg') no-repeat center center fixed;
-            background-size: cover;
-            color: white;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            text-align: center;
-        }
-        .container {
-            background: rgba(0, 0, 0, 0.8);
-            padding: 3rem;
-            border-radius: 15px;
-            max-width: 500px;
-            width: 90%;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            border: 1px solid rgba(255,255,255,0.1);
-        }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('https://dl.strem.io/addon-background.jpg') no-repeat center center fixed; background-size: cover; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; }
+        .container { background: rgba(0, 0, 0, 0.8); padding: 3rem; border-radius: 15px; max-width: 500px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); }
         h1 { margin-top: 0; margin-bottom: 1rem; font-size: 2.5rem; }
         p { margin-bottom: 2.5rem; opacity: 0.9; font-size: 1.1rem; line-height: 1.6; }
-        .install-btn {
-            display: inline-block;
-            background-color: #8A5BB8;
-            color: white;
-            padding: 1.2rem 2.5rem;
-            text-decoration: none;
-            font-weight: bold;
-            border-radius: 8px;
-            margin-bottom: 1.5rem;
-            transition: transform 0.2s, background 0.3s;
-            font-size: 1.2rem;
-            letter-spacing: 1px;
-        }
-        .install-btn:hover { 
-            background-color: #7a4ba8; 
-            transform: scale(1.05);
-        }
-        .manifest-link {
-            display: block;
-            color: #aaa;
-            text-decoration: none;
-            font-size: 0.9rem;
-            transition: color 0.3s;
-        }
+        .install-btn { display: inline-block; background-color: #8A5BB8; color: white; padding: 1.2rem 2.5rem; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 1.5rem; transition: transform 0.2s, background 0.3s; font-size: 1.2rem; letter-spacing: 1px; }
+        .install-btn:hover { background-color: #7a4ba8; transform: scale(1.05); }
+        .manifest-link { display: block; color: #aaa; text-decoration: none; font-size: 0.9rem; transition: color 0.3s; }
         .manifest-link:hover { color: #fff; text-decoration: underline; }
+        .nav-links { margin-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; }
+        .nav-links a { color: #8A5BB8; text-decoration: none; margin: 0 10px; font-size: 0.8rem; }
     </style>
 </head>
 <body>
@@ -169,6 +141,10 @@ function getLandingPageHtml() {
         <p>Streams resolved via Broker (B) and Worker (C)</p>
         <a href="stremio://add-jipi.vercel.app/manifest.json" class="install-btn">INSTALL ADDON</a>
         <a href="https://add-jipi.vercel.app/manifest.json" class="manifest-link">Manual Manifest Link</a>
+        <div class="nav-links">
+            <a href="/health">Health Check</a>
+            <a href="/quarantine">Quarantine Logs</a>
+        </div>
     </div>
 </body>
 </html>
@@ -213,6 +189,7 @@ async function applyRequestControls(req, pathname) {
       await redisCommand(["DEL", `active:url:${activeIp}`, `active:last_seen:${activeIp}`, slotKey]);
       await redisCommand(["SET", slotKey, ip, "EX", String(SLOT_TTL)]);
     } else {
+      await redisCommand(["INCR", "stats:slot_taken"]);
       return {
         allowed: false,
         reason: "blocked:slot_taken",
@@ -253,9 +230,7 @@ async function handleStreamRequest(res, pathname, ip) {
         });
         return true;
       }
-    } catch (e) {
-      // Invalid JSON, treat as missing
-    }
+    } catch (e) { }
   }
 
   // Resolve via B
@@ -268,7 +243,6 @@ async function handleStreamRequest(res, pathname, ip) {
       updatedAt: Date.now()
     };
     
-    // Overwrite URL and update last_seen
     await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
     await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
 
@@ -281,6 +255,7 @@ async function handleStreamRequest(res, pathname, ip) {
     });
     return true;
   } catch (err) {
+    await redisCommand(["INCR", "stats:broker_error"]);
     const event = {
       ip,
       error: err.message,
@@ -290,18 +265,60 @@ async function handleStreamRequest(res, pathname, ip) {
     try {
       await redisCommand(["LPUSH", "quarantine:events", JSON.stringify(event)]);
       await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
-    } catch (redisErr) {
-      // Ignore quarantine write errors to not mask the original B error
-    }
-    throw err;
+    } catch (redisErr) { }
+    
+    sendErrorStream(res, "ERROR: Broker timeout or invalid response.");
+    return true;
   }
+}
+
+async function handleQuarantine(res) {
+  const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
+  const slotTaken = await redisCommand(["GET", "stats:slot_taken"]) || 0;
+  const brokerErrors = await redisCommand(["GET", "stats:broker_error"]) || 0;
+
+  const events = eventsRaw.map(e => {
+    try { return JSON.parse(e); } catch { return { error: "Parse error", raw: e }; }
+  });
+
+  const rows = events.map(e => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #444">${e.time || ""}</td>
+      <td style="padding:8px;border-bottom:1px solid #444">${e.ip || ""}</td>
+      <td style="padding:8px;border-bottom:1px solid #444">${e.episodeId || ""}</td>
+      <td style="padding:8px;border-bottom:1px solid #444;color:#ff6b6b">${e.error || ""}</td>
+    </tr>
+  `).join("");
+
+  const html = `
+    <html>
+      <body style="background:#1a1a1a;color:#eee;font-family:sans-serif;padding:2rem">
+        <h2>Quarantine Events (Last 50)</h2>
+        <p><b>Stats:</b> Slot Taken Blocks: ${slotTaken} | Broker Errors: ${brokerErrors}</p>
+        <table style="width:100%;border-collapse:collapse;background:#2a2a2a">
+          <thead>
+            <tr style="background:#333">
+              <th style="padding:8px;text-align:left">Time</th>
+              <th style="padding:8px;text-align:left">IP</th>
+              <th style="padding:8px;text-align:left">Episode</th>
+              <th style="padding:8px;text-align:left">Error</th>
+            </tr>
+          </thead>
+          <tbody>${rows || "<tr><td colspan='4' style='padding:20px;text-align:center'>No events</td></tr>"}</tbody>
+        </table>
+        <br><a href="/" style="color:#8A5BB8">Back to Home</a>
+      </body>
+    </html>
+  `;
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/html");
+  res.end(html);
 }
 
 module.exports = async function (req, res) {
   const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const pathname = reqUrl.pathname;
 
-  // Serve Landing Page
   if (pathname === "/") {
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html");
@@ -309,13 +326,37 @@ module.exports = async function (req, res) {
     return;
   }
 
+  if (pathname === "/health") {
+    try {
+      await redisCommand(["PING"]);
+      sendJson(res, 200, { status: "OK", redis: "Connected" });
+    } catch (e) {
+      sendJson(res, 500, { status: "FAIL", error: e.message });
+    }
+    return;
+  }
+
+  if (pathname === "/quarantine") {
+    try {
+      await handleQuarantine(res);
+    } catch (e) {
+      sendJson(res, 500, { error: e.message });
+    }
+    return;
+  }
+
   try {
     const controlResult = await applyRequestControls(req, pathname);
+    
     if (!controlResult.allowed) {
-      sendJson(res, 503, {
-        error: "Addon temporarily unavailable",
-        reason: controlResult.reason
-      });
+      if (pathname.startsWith("/stream/")) {
+        const errorMsg = controlResult.reason === "blocked:shutdown_window" 
+          ? "ERROR: Blocked between 20:00–21:00 (Jerusalem time)."
+          : "ERROR: System busy (slot taken). Try again later.";
+        sendErrorStream(res, errorMsg);
+        return;
+      }
+      sendJson(res, 503, { error: "Addon temporarily unavailable", reason: controlResult.reason });
       return;
     }
 
@@ -324,10 +365,11 @@ module.exports = async function (req, res) {
       if (handled) return;
     }
   } catch (error) {
-    sendJson(res, 503, {
-      error: "Addon error",
-      message: error.message
-    });
+    if (pathname.startsWith("/stream/")) {
+      sendErrorStream(res, "ERROR: System/Database error. Try again.");
+      return;
+    }
+    sendJson(res, 503, { error: "Addon error", message: error.message });
     return;
   }
 
