@@ -50,7 +50,7 @@ Each task was committed atomically:
 1. **Task 1: Apply minimal manifest and catalog schema hardening** - `7c1c42f` (feat)
 2. **Task 2: Add automated manifest and catalog contract checks** - `084f87e` (feat)
 
-**Plan metadata:** pending docs commit
+**Plan metadata:** `95a0830` (docs)
 
 ## Files Created/Modified
 - `addon.js` - Added manifest catalog `name` field for compatibility.
