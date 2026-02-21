@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Harden manifest/catalog compatibility and add automated contract checks.
+- [x] 01-01-PLAN.md — Harden manifest/catalog compatibility and add automated contract checks.
 - [ ] 01-02-PLAN.md — Harden stream contract behavior and verify Stremio client flow.
 
 ### Phase 2: Security Boundary Hardening
@@ -82,7 +82,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Contract Compatibility Baseline | 0/2 | Not started | - |
+| 1. Contract Compatibility Baseline | 1/2 | In Progress | 2026-02-21 |
 | 2. Security Boundary Hardening | 0/2 | Not started | - |
 | 3. Stream Reliability Controls | 0/2 | Not started | - |
 | 4. Observability and Diagnostics | 0/2 | Not started | - |

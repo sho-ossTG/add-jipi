@@ -9,8 +9,8 @@ Requirements for initial release hardening. Each maps to roadmap phases.
 
 ### Contract Compatibility
 
-- [ ] **CONT-01**: User can install the addon and receive a valid `manifest.json` response compatible with Stremio clients.
-- [ ] **CONT-02**: User can browse catalog entries and receive valid catalog payloads for supported content.
+- [x] **CONT-01**: User can install the addon and receive a valid `manifest.json` response compatible with Stremio clients.
+- [x] **CONT-02**: User can browse catalog entries and receive valid catalog payloads for supported content.
 - [ ] **CONT-03**: User requesting a supported episode receives a protocol-valid stream response.
 
 ### Security
@@ -66,8 +66,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONT-01 | Phase 1 | Pending |
-| CONT-02 | Phase 1 | Pending |
+| CONT-01 | Phase 1 | Complete |
+| CONT-02 | Phase 1 | Complete |
 | CONT-03 | Phase 1 | Pending |
 | SECU-01 | Phase 2 | Pending |
 | SECU-02 | Phase 2 | Pending |
