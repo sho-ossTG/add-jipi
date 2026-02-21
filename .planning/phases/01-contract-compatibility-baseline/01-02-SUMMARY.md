@@ -53,7 +53,7 @@ Each task was committed atomically:
 2. **Task 2: Add automated stream compatibility tests** - `8240389` (feat)
 3. **Task 3: Verify install and playback flow in Stremio client** - Auto-approved checkpoint (no code changes)
 
-**Plan metadata:** Pending docs commit
+**Plan metadata:** `ca6494d` (docs)
 
 ## Files Created/Modified
 - `serverless.js` - Kept stream fallback contract-safe and made degraded stream messages clearer while preserving baseline policy behavior.
