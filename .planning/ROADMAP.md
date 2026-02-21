@@ -1,0 +1,85 @@
+# Roadmap: add-jipi
+
+## Overview
+
+This roadmap hardens the existing addon without breaking Stremio compatibility, moving from stable contract behavior to secure boundaries, reliable dependency handling, diagnosable operations, and maintainable modular code with deterministic test coverage.
+
+## Phases
+
+**Phase Numbering:**
+- Integer phases (1, 2, 3): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+Decimal phases appear between their surrounding integers in numeric order.
+
+- [ ] **Phase 1: Contract Compatibility Baseline** - Preserve manifest, catalog, and stream contract behavior for supported episodes.
+- [ ] **Phase 2: Security Boundary Hardening** - Restrict operational surfaces and enforce trusted request identity.
+- [ ] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load.
+- [ ] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals.
+- [ ] **Phase 5: Modularization and Test Governance** - Split core concerns into maintainable modules with reliable automated validation.
+
+## Phase Details
+
+### Phase 1: Contract Compatibility Baseline
+**Goal**: Users can install and use the addon with protocol-valid manifest, catalog, and stream responses for supported episodes.
+**Depends on**: Nothing (first phase)
+**Requirements**: CONT-01, CONT-02, CONT-03
+**Success Criteria** (what must be TRUE):
+  1. User can install the addon in Stremio and receive a valid `manifest.json` response.
+  2. User can browse the addon catalog and receive valid payloads for supported content.
+  3. User requesting a supported episode receives a protocol-valid stream response that plays in client flow.
+**Plans**: TBD
+
+### Phase 2: Security Boundary Hardening
+**Goal**: Operational and admin capabilities are only available to authorized operators, with trusted client attribution and minimal exposure.
+**Depends on**: Phase 1
+**Requirements**: SECU-01, SECU-02, SECU-03, SECU-04
+**Success Criteria** (what must be TRUE):
+  1. Unauthorized requests to diagnostics/admin routes are denied, while authorized operators can access them.
+  2. Request handling uses trusted client identity sources so spoofed forwarded headers do not alter attribution.
+  3. Public-facing diagnostic responses never expose raw IPs or internal error details.
+  4. Browser requests are accepted only from explicitly allowed origins and headers.
+**Plans**: TBD
+
+### Phase 3: Stream Reliability Controls
+**Goal**: Stream resolution remains deterministic and protocol-safe under concurrency and dependency degradation.
+**Depends on**: Phase 2
+**Requirements**: RELY-01, RELY-02, RELY-03
+**Success Criteria** (what must be TRUE):
+  1. Concurrent stream requests enforce capacity/session policy atomically without inconsistent admission outcomes.
+  2. Stream-path dependency calls complete within bounded time (timeouts/retry limits) rather than hanging requests.
+  3. When broker or Redis fails, users still receive deterministic protocol-safe fallback behavior.
+**Plans**: TBD
+
+### Phase 4: Observability and Diagnostics
+**Goal**: Operators can quickly diagnose failed or degraded behavior through correlated, structured, and safely exposed telemetry.
+**Depends on**: Phase 3
+**Requirements**: OBSV-01, OBSV-02, OBSV-03
+**Success Criteria** (what must be TRUE):
+  1. Operators can follow a failing request path end-to-end with a correlation ID across request, policy, and dependency events.
+  2. Operational telemetry clearly classifies failures by source (broker, Redis, validation, policy).
+  3. Operators can query health and key reliability metrics without seeing sensitive internals.
+**Plans**: TBD
+
+### Phase 5: Modularization and Test Governance
+**Goal**: Maintainers can change core backend concerns safely with modular boundaries and deterministic test coverage.
+**Depends on**: Phase 4
+**Requirements**: MAINT-01, MAINT-02, MAINT-03
+**Success Criteria** (what must be TRUE):
+  1. Maintainer can update routing, policy, integrations, and presentation code in separate modules with clear boundaries.
+  2. Maintainer can run automated tests that validate stream contract behavior and failure branches before deployment.
+  3. Maintainer can run deterministic tests that reproduce time-window and session-gating policy behavior.
+**Plans**: TBD
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Contract Compatibility Baseline | 0/2 | Not started | - |
+| 2. Security Boundary Hardening | 0/2 | Not started | - |
+| 3. Stream Reliability Controls | 0/2 | Not started | - |
+| 4. Observability and Diagnostics | 0/2 | Not started | - |
+| 5. Modularization and Test Governance | 0/2 | Not started | - |
