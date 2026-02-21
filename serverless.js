@@ -6,6 +6,7 @@ const router = getRouter(addonInterface);
 // Constants
 const SLOT_TTL = 3600; 
 const INACTIVITY_LIMIT = 20 * 60; 
+const MAX_SESSIONS = 2; 
 const ACTIVE_URL_TTL = 3600 * 2; 
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
@@ -172,8 +173,8 @@ async function applyRequestControls(req, pathname) {
 
   const jInfo = getJerusalemInfo();
 
-  // 1. Blocked Hours (20:00-21:00 Israel)
-  if (jInfo.hour === 20) {
+  // 1. Blocked Hours (00:00-08:00 Israel)
+  if (jInfo.hour >= 0 && jInfo.hour < 8) {
     return { allowed: false, reason: "blocked:shutdown_window" };
   }
 
@@ -188,36 +189,29 @@ async function applyRequestControls(req, pathname) {
   }
 
   const ip = getClientIp(req);
-  const slotKey = "slot:active_ip";
-  const activeIp = await redisCommand(["GET", slotKey]);
+  const sessionsKey = "system:active_sessions";
+  const now = Date.now();
+  const cutoff = now - (INACTIVITY_LIMIT * 1000);
 
-  if (activeIp && activeIp !== ip) {
-    const lastSeen = await redisCommand(["GET", `active:last_seen:${activeIp}`]);
-    if (!lastSeen) {
-      // Inactive - Move to Archive
-      const urlData = await redisCommand(["GET", `active:url:${activeIp}`]);
-      if (urlData) {
-        const ttl0100 = getSecondsToJerusalem0100();
-        await redisCommand(["SET", `archive:url:${activeIp}`, urlData, "EX", String(ttl0100)]);
-        await redisCommand(["SET", `archive:last_seen:${activeIp}`, "stale", "EX", String(ttl0100)]);
-      }
-      // Cleanup & Take Slot
-      await redisCommand(["DEL", `active:url:${activeIp}`, `active:last_seen:${activeIp}`, slotKey]);
-      await redisCommand(["SET", slotKey, ip, "EX", String(SLOT_TTL)]);
-    } else {
-      await redisCommand(["INCR", "stats:slot_taken"]);
-      return {
-        allowed: false,
-        reason: "blocked:slot_taken",
-        debug: { activeIp, currentIp: ip }
-      };
-    }
-  } else if (!activeIp) {
-    await redisCommand(["SET", slotKey, ip, "EX", String(SLOT_TTL)]);
+  // Cleanup expired sessions
+  await redisCommand(["ZREMRANGEBYSCORE", sessionsKey, "-inf", String(cutoff)]);
+
+  // Check concurrency
+  const score = await redisCommand(["ZSCORE", sessionsKey, ip]);
+  const count = await redisCommand(["ZCARD", sessionsKey]);
+
+  if (score === null && count >= MAX_SESSIONS) {
+    await redisCommand(["INCR", "stats:slot_taken"]);
+    return {
+      allowed: false,
+      reason: "blocked:slot_taken",
+      debug: { activeCount: count, currentIp: ip }
+    };
   }
 
-  // Refresh slot TTL (Rolling)
-  await redisCommand(["EXPIRE", slotKey, String(SLOT_TTL)]);
+  // Refresh/Add session (Heartbeat)
+  await redisCommand(["ZADD", sessionsKey, String(now), ip]);
+  await redisCommand(["EXPIRE", sessionsKey, String(SLOT_TTL)]);
 
   return { allowed: true, ip };
 }
@@ -302,6 +296,7 @@ async function handleQuarantine(res) {
   const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
   const slotTaken = await redisCommand(["GET", "stats:slot_taken"]) || 0;
   const brokerErrors = await redisCommand(["GET", "stats:broker_error"]) || 0;
+  const activeCount = await redisCommand(["ZCARD", "system:active_sessions"]) || 0;
 
   const events = eventsRaw.map(e => {
     try { return JSON.parse(e); } catch { return { error: "Parse error", raw: e }; }
@@ -320,7 +315,7 @@ async function handleQuarantine(res) {
     <html>
       <body style="background:#1a1a1a;color:#eee;font-family:sans-serif;padding:2rem">
         <h2>Quarantine Events (Last 50)</h2>
-        <p><b>Stats:</b> Slot Taken Blocks: ${slotTaken} | Broker Errors: ${brokerErrors}</p>
+        <p><b>Stats:</b> Active Sessions: ${activeCount}/${MAX_SESSIONS} | Slot Taken Blocks: ${slotTaken} | Broker Errors: ${brokerErrors}</p>
         <table style="width:100%;border-collapse:collapse;background:#2a2a2a">
           <thead>
             <tr style="background:#333">
@@ -377,7 +372,7 @@ module.exports = async function (req, res) {
     if (!controlResult.allowed) {
       if (pathname.startsWith("/stream/")) {
         const errorMsg = controlResult.reason === "blocked:shutdown_window" 
-          ? "ERROR: Blocked between 20:00–21:00 (Jerusalem time)."
+          ? "ERROR: Blocked between 00:00–08:00 (Jerusalem time)."
           : "ERROR: System busy (slot taken). Try again later.";
         sendErrorStream(res, errorMsg);
         return;
