@@ -4,7 +4,8 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node serverless.js"
+    "start": "node serverless.js",
+    "test:contract:manifest-catalog": "node --test tests/contract-manifest-catalog.test.js"
   },
   "dependencies": {
     "stremio-addon-sdk": "^1.6.10"
