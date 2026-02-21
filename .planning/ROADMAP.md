@@ -43,7 +43,11 @@ Plans:
   2. Request handling uses trusted client identity sources so spoofed forwarded headers do not alter attribution.
   3. Public-facing diagnostic responses never expose raw IPs or internal error details.
   4. Browser requests are accepted only from explicitly allowed origins and headers.
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Add operator auth gating, trusted client attribution, and diagnostics/public redaction with security contract tests.
+- [ ] 02-02-PLAN.md — Enforce explicit CORS allowlist and preflight behavior with CORS contract tests.
 
 ### Phase 3: Stream Reliability Controls
 **Goal**: Stream resolution remains deterministic and protocol-safe under concurrency and dependency degradation.
