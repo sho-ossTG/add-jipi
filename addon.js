@@ -10,7 +10,7 @@ const manifest = {
   description: "Streams resolved via Broker (B) and Worker (C)",
   resources: ["catalog", "stream"],
   types: ["series"],
-  catalogs: [{ type: "series", id: "onepiece_catalog" }],
+  catalogs: [{ type: "series", id: "onepiece_catalog", name: "One Piece" }],
   idPrefixes: [IMDB_ID]
 };
 
