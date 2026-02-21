@@ -86,6 +86,7 @@ builder.defineStreamHandler(async (args) => {
     return {
       streams: [
         {
+          name: "Jipi",
           title: resolved.title,
           url: resolved.url,
           behaviorHints: { notWebReady: true }

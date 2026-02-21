@@ -109,17 +109,11 @@ function sendJson(res, statusCode, payload) {
 
 function formatStream(title, url) {
   return {
+    name: "Jipi",
     title: title,
     url: url,
     behaviorHints: {
-      notWebReady: false,
-      proxyHeaders: {
-        request: {
-          "User-Agent": BROWSER_UA,
-          "Referer": NEUTRAL_ORIGIN,
-          "Origin": NEUTRAL_ORIGIN
-        }
-      }
+      notWebReady: true
     }
   };
 }
