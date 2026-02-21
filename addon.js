@@ -81,8 +81,17 @@ async function resolveEpisode(episodeId) {
 }
 
 builder.defineStreamHandler(async (args) => {
+  if (args.type !== "series") {
+    return { streams: [] };
+  }
+
+  const streamId = String(args.id || "");
+  if (!streamId.startsWith(IMDB_ID)) {
+    return { streams: [] };
+  }
+
   try {
-    const resolved = await resolveEpisode(args.id);
+    const resolved = await resolveEpisode(streamId);
 
     return {
       streams: [

@@ -256,7 +256,7 @@ async function handleStreamRequest(res, pathname, ip) {
     }
 
     if (!finalUrl.startsWith("https://")) {
-      sendErrorStream(res, "ERROR: Resolved URL is not HTTPS (Incompatible with Desktop/TV).");
+      sendErrorStream(res, "Resolved stream is not HTTPS. Try another episode shortly.");
       return true;
     }
 
@@ -287,7 +287,7 @@ async function handleStreamRequest(res, pathname, ip) {
       await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
     } catch (redisErr) { }
     
-    sendErrorStream(res, "ERROR: Broker timeout or invalid response.");
+    sendErrorStream(res, "Stream source is temporarily unavailable. Please retry shortly.");
     return true;
   }
 }
@@ -372,8 +372,8 @@ module.exports = async function (req, res) {
     if (!controlResult.allowed) {
       if (pathname.startsWith("/stream/")) {
         const errorMsg = controlResult.reason === "blocked:shutdown_window" 
-          ? "ERROR: Blocked between 00:00–08:00 (Jerusalem time)."
-          : "ERROR: System busy (slot taken). Try again later.";
+          ? "Streaming is paused between 00:00 and 08:00 Jerusalem time."
+          : "Stream capacity is currently full. Please try again in a few minutes.";
         sendErrorStream(res, errorMsg);
         return;
       }
@@ -387,7 +387,7 @@ module.exports = async function (req, res) {
     }
   } catch (error) {
     if (pathname.startsWith("/stream/")) {
-      sendErrorStream(res, "ERROR: System/Database error. Try again.");
+      sendErrorStream(res, "System state is temporarily unavailable. Please retry shortly.");
       return;
     }
     sendJson(res, 503, { error: "Addon error", message: error.message });
