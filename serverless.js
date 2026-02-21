@@ -104,6 +104,8 @@ function isStremioRoute(pathname) {
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "*");
   res.end(JSON.stringify(payload));
 }
 
@@ -225,6 +227,12 @@ async function handleStreamRequest(res, pathname, ip) {
   if (!match || match[1] !== "series") return false;
   
   const episodeId = decodeURIComponent(match[2]);
+  
+  // Only handle One Piece
+  if (!episodeId.startsWith("tt0388629")) {
+    return false;
+  }
+
   const activeUrlKey = `active:url:${ip}`;
   const lastSeenKey = `active:last_seen:${ip}`;
 

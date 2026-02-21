@@ -1,6 +1,7 @@
 const { addonBuilder } = require("stremio-addon-sdk");
 
 const B_BASE_URL = process.env.B_BASE_URL || "";
+const IMDB_ID = "tt0388629";
 
 const manifest = {
   id: "org.jipi.onepiece",
@@ -10,7 +11,7 @@ const manifest = {
   resources: ["catalog", "stream"],
   types: ["series"],
   catalogs: [{ type: "series", id: "onepiece_catalog" }],
-  idPrefixes: ["tt"]
+  idPrefixes: [IMDB_ID]
 };
 
 const builder = new addonBuilder(manifest);
