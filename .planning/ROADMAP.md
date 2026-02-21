@@ -12,7 +12,7 @@ This roadmap hardens the existing addon without breaking Stremio compatibility, 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Contract Compatibility Baseline** - Preserve manifest, catalog, and stream contract behavior for supported episodes.
+- [x] **Phase 1: Contract Compatibility Baseline** - Preserve manifest, catalog, and stream contract behavior for supported episodes.
 - [ ] **Phase 2: Security Boundary Hardening** - Restrict operational surfaces and enforce trusted request identity.
 - [ ] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load.
 - [ ] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals.
@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01-PLAN.md — Harden manifest/catalog compatibility and add automated contract checks.
-- [ ] 01-02-PLAN.md — Harden stream contract behavior and verify Stremio client flow.
+- [x] 01-02-PLAN.md — Harden stream contract behavior and verify Stremio client flow.
 
 ### Phase 2: Security Boundary Hardening
 **Goal**: Operational and admin capabilities are only available to authorized operators, with trusted client attribution and minimal exposure.
@@ -82,7 +82,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Contract Compatibility Baseline | 1/2 | In Progress | 2026-02-21 |
+| 1. Contract Compatibility Baseline | 2/2 | Complete | 2026-02-21 |
 | 2. Security Boundary Hardening | 0/2 | Not started | - |
 | 3. Stream Reliability Controls | 0/2 | Not started | - |
 | 4. Observability and Diagnostics | 0/2 | Not started | - |
