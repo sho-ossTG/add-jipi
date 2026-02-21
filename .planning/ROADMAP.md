@@ -28,7 +28,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. User can install the addon in Stremio and receive a valid `manifest.json` response.
   2. User can browse the addon catalog and receive valid payloads for supported content.
   3. User requesting a supported episode receives a protocol-valid stream response that plays in client flow.
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Harden manifest/catalog compatibility and add automated contract checks.
+- [ ] 01-02-PLAN.md — Harden stream contract behavior and verify Stremio client flow.
 
 ### Phase 2: Security Boundary Hardening
 **Goal**: Operational and admin capabilities are only available to authorized operators, with trusted client attribution and minimal exposure.
