@@ -28,9 +28,9 @@ Requirements for initial release hardening. Each maps to roadmap phases.
 
 ### Observability
 
-- [ ] **OBSV-01**: Operator can trace failed or degraded requests using correlation IDs across request, policy, and dependency calls.
-- [ ] **OBSV-02**: Operator can see structured failure categories that distinguish broker, Redis, validation, and policy failures.
-- [ ] **OBSV-03**: Operator can query health and key reliability metrics without exposing sensitive internals.
+- [x] **OBSV-01**: Operator can trace failed or degraded requests using correlation IDs across request, policy, and dependency calls.
+- [x] **OBSV-02**: Operator can see structured failure categories that distinguish broker, Redis, validation, and policy failures.
+- [x] **OBSV-03**: Operator can query health and key reliability metrics without exposing sensitive internals.
 
 ### Maintainability & Quality
 
@@ -76,9 +76,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RELY-01 | Phase 3 | Complete |
 | RELY-02 | Phase 3 | Complete |
 | RELY-03 | Phase 3 | Complete |
-| OBSV-01 | Phase 4 | Pending |
-| OBSV-02 | Phase 4 | Pending |
-| OBSV-03 | Phase 4 | Pending |
+| OBSV-01 | Phase 4 | Complete |
+| OBSV-02 | Phase 4 | Complete |
+| OBSV-03 | Phase 4 | Complete |
 | MAINT-01 | Phase 5 | Pending |
 | MAINT-02 | Phase 5 | Pending |
 | MAINT-03 | Phase 5 | Pending |
@@ -90,4 +90,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-02-21*
-*Last updated: 2026-02-21 after roadmap mapping*
+*Last updated: 2026-02-22 after phase 4 completion*
