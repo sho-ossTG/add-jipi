@@ -60,7 +60,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Implement atomic concurrency gating and bounded dependency execution with reliability contract tests.
+- [x] 03-01-PLAN.md — Implement atomic concurrency gating and bounded dependency execution with reliability contract tests.
 - [ ] 03-02-PLAN.md — Enforce deterministic degraded response mapping and latest-request-wins reliability behavior.
 
 ### Phase 4: Observability and Diagnostics
@@ -92,6 +92,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Contract Compatibility Baseline | 2/2 | Complete    | 2026-02-21 |
 | 2. Security Boundary Hardening | 2/2 | Complete    | 2026-02-22 |
-| 3. Stream Reliability Controls | 0/2 | Not started | - |
+| 3. Stream Reliability Controls | 1/2 | In Progress | - |
 | 4. Observability and Diagnostics | 0/2 | Not started | - |
 | 5. Modularization and Test Governance | 0/2 | Not started | - |

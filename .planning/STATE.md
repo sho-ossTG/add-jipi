@@ -9,17 +9,17 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 
 ## Current Position
 
-Phase: 2 of 5 (Security Boundary Hardening)
-Plan: 2 of 2 in current phase
-Status: Complete
-Last activity: 2026-02-22 - Recovered 02-02 commit lineage with task-level commits and refreshed summary/state artifacts.
+Phase: 3 of 5 (Stream Reliability Controls)
+Plan: 1 of 2 in current phase
+Status: In Progress
+Last activity: 2026-02-22 - Completed 03-01 atomic stream gating and bounded dependency reliability controls.
 
-Progress: [####------] 40%
+Progress: [#####-----] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 2 min
 - Total execution time: 0.2 hours
 
@@ -29,15 +29,16 @@ Progress: [####------] 40%
 |-------|-------|-------|----------|
 | 1. Contract Compatibility Baseline | 2 | 3 min | 2 min |
 | 2. Security Boundary Hardening | 2 | 4 min | 2 min |
-| 3. Stream Reliability Controls | 0 | 0 min | 0 min |
+| 3. Stream Reliability Controls | 1 | 2 min | 2 min |
 | 4. Observability and Diagnostics | 0 | 0 min | 0 min |
 | 5. Modularization and Test Governance | 0 | 0 min | 0 min |
 
 **Recent Trend:**
-- Last 5 plans: Phase 01 Plan 01 (1 min), Phase 01 Plan 02 (2 min), Phase 02 Plan 01 (2 min), Phase 02 Plan 02 (2 min)
+- Last 5 plans: Phase 01 Plan 01 (1 min), Phase 01 Plan 02 (2 min), Phase 02 Plan 01 (2 min), Phase 02 Plan 02 (2 min), Phase 03 Plan 01 (2 min)
 - Trend: Stable
 | Phase 02 P01 | 1 min | 3 tasks | 4 files |
 | Phase 02 P02 | 8 min | 2 tasks | 3 files |
+| Phase 03 P01 | 2 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Public failures return generic service_unavailable payloads while operator diagnostics stay gated.
 - [Phase 02]: Reflect CORS allow-origin only for explicitly allowlisted origins with Vary: Origin.
 - [Phase 02]: Reject preflight requests when access-control-request-method is outside CORS_ALLOW_METHODS.
+- [Phase 03]: Use Redis EVAL for atomic stream admission decisions (cleanup, rotation, and heartbeat) to eliminate concurrency race drift.
+- [Phase 03]: Bound broker dependency calls with AbortSignal timeout and exactly one transient jittered retry under a hard total budget.
 
 ### Pending Todos
 
@@ -72,6 +75,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 08:55
-Stopped at: Phase 3 context gathered.
-Resume file: .planning/phases/03-stream-reliability-controls/03-CONTEXT.md
+Last session: 2026-02-22 10:31
+Stopped at: Completed 03-01-PLAN.md
+Resume file: None
