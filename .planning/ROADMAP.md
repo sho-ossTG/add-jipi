@@ -61,7 +61,7 @@ Plans:
 
 Plans:
 - [x] 03-01-PLAN.md — Implement atomic concurrency gating and bounded dependency execution with reliability contract tests.
-- [ ] 03-02-PLAN.md — Enforce deterministic degraded response mapping and latest-request-wins reliability behavior.
+- [x] 03-02-PLAN.md — Enforce deterministic degraded response mapping and latest-request-wins reliability behavior.
 
 ### Phase 4: Observability and Diagnostics
 **Goal**: Operators can quickly diagnose failed or degraded behavior through correlated, structured, and safely exposed telemetry.
