@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 5 of 5 (Modularization and Test Governance)
-Plan: 4 of 6 in current phase
+Plan: 5 of 6 in current phase
 Status: In progress
-Last activity: 2026-02-22 - Completed 05-04-PLAN.md.
+Last activity: 2026-02-22 - Completed 05-05-PLAN.md.
 
-Progress: █████████░ 87%
+Progress: █████████░ 93%
 
 ## Performance Metrics
 
@@ -79,6 +79,9 @@ Recent decisions affecting current work:
 - [Phase 05]: Serverless entrypoint keeps request controls as thin dependency composition, avoiding embedded reusable admission logic.
 - [Phase 05]: Stream orchestration and latest-selection handling live in `modules/routing/stream-route.js`, with `serverless.js` limited to dependency composition and transport lifecycle.
 - [Phase 05]: Redis integration resolves runtime config/fetch per command to preserve observability degraded-branch behavior under contract tests.
+- [Phase 05]: `modules/routing/http-handler.js` now owns operator/public route composition, while `serverless.js` is adapter-only and exports `createHttpHandler`.
+- [Phase 05]: Operator diagnostics/quarantine/public output shaping is isolated in `modules/presentation/*` boundaries, not integration clients.
+- [Phase 05]: HTTP handler resolves addon interface at request time to keep contract telemetry classification deterministic under module-cache resets.
 
 ### Pending Todos
 
@@ -90,6 +93,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 13:42
-Stopped at: Completed 05-04-PLAN.md
+Last session: 2026-02-22 15:52
+Stopped at: Completed 05-05-PLAN.md
 Resume file: None
