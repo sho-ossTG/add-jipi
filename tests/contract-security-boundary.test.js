@@ -157,6 +157,10 @@ test("operator diagnostics routes deny unauthorized requests", async () => {
 
   assert.equal(response.statusCode, 401);
   assert.deepEqual(JSON.parse(response.body), { error: "operator_token_required" });
+
+  const operatorMetrics = await request("/operator/metrics");
+  assert.equal(operatorMetrics.statusCode, 401);
+  assert.deepEqual(JSON.parse(operatorMetrics.body), { error: "operator_token_required" });
 });
 
 test("operator diagnostics routes allow authorized requests", async () => {
@@ -170,6 +174,26 @@ test("operator diagnostics routes allow authorized requests", async () => {
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(JSON.parse(response.body), { status: "OK", redis: "connected" });
+
+  const metricsResponse = await request("/operator/metrics", {
+    headers: {
+      authorization: "Bearer top-secret"
+    }
+  });
+
+  assert.equal(metricsResponse.statusCode, 200);
+
+  const metricsPayload = JSON.parse(metricsResponse.body);
+  assert.equal(metricsPayload.status, "OK");
+  assert.equal(metricsPayload.dependencies.redis, "connected");
+  assert.ok(metricsPayload.reliability);
+
+  const serialized = JSON.stringify(metricsPayload).toLowerCase();
+  assert.doesNotMatch(serialized, /authorization/);
+  assert.doesNotMatch(serialized, /x-forwarded-for/);
+  assert.doesNotMatch(serialized, /198\.51\.100\./);
+  assert.doesNotMatch(serialized, /stack/);
+  assert.doesNotMatch(serialized, /https?:\/\//);
 });
 
 test("trusted attribution ignores spoofed forwarded header", async () => {

@@ -66,7 +66,8 @@ function withFixedJerusalemTime(run, hour = "12") {
 
 function createRedisRuntime() {
   const state = {
-    strings: new Map()
+    strings: new Map(),
+    hashes: new Map()
   };
 
   async function fetch(_url, options = {}) {
@@ -94,6 +95,21 @@ function createRedisRuntime() {
       const next = Number(state.strings.get(key) || 0) + 1;
       state.strings.set(key, String(next));
       result = next;
+    }
+
+    if (op === "HINCRBY") {
+      const field = String(command[2] || "");
+      const amount = Number(command[3] || 0);
+      const hash = state.hashes.get(key) || new Map();
+      const next = Number(hash.get(field) || 0) + amount;
+      hash.set(field, String(next));
+      state.hashes.set(key, hash);
+      result = next;
+    }
+
+    if (op === "HGETALL") {
+      const hash = state.hashes.get(key) || new Map();
+      result = Array.from(hash.entries()).flat();
     }
 
     if (op === "LPUSH" || op === "LTRIM") {
@@ -251,4 +267,57 @@ test("unknown free-form source values normalize to canonical source taxonomy", (
 
   assert.deepEqual(Object.values(SOURCES).sort(), ["broker", "policy", "redis", "validation"]);
   assert.ok(Object.values(SOURCES).includes(normalized.source));
+});
+
+test("operator metrics expose bounded reliability labels and redact sensitive fields", async () => {
+  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token";
+  process.env.OPERATOR_TOKEN = "top-secret";
+
+  const runtime = createRedisRuntime();
+  const originalFetch = global.fetch;
+  global.fetch = runtime.fetch;
+
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  addon.resolveEpisode = async () => ({
+    url: "https://cdn.example.com/onepiece-1-5.mp4",
+    title: "One Piece S1E5"
+  });
+
+  const handler = loadServerless();
+
+  try {
+    await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A5.json"));
+
+    const response = await runRequest(handler, "/operator/metrics", {
+      headers: { authorization: "Bearer top-secret" }
+    });
+
+    assert.equal(response.statusCode, 200);
+    const payload = JSON.parse(response.body);
+
+    assert.equal(payload.status, "OK");
+    assert.equal(payload.dependencies.redis, "connected");
+    assert.ok(Array.isArray(payload.reliability.metrics));
+
+    for (const metric of payload.reliability.metrics) {
+      assert.ok(payload.reliability.boundedDimensions.source.includes(metric.labels.source));
+      assert.ok(payload.reliability.boundedDimensions.cause.includes(metric.labels.cause));
+      assert.ok(payload.reliability.boundedDimensions.routeClass.includes(metric.labels.routeClass));
+      assert.ok(payload.reliability.boundedDimensions.result.includes(metric.labels.result));
+    }
+
+    const serialized = JSON.stringify(payload).toLowerCase();
+    assert.doesNotMatch(serialized, /authorization/);
+    assert.doesNotMatch(serialized, /x-forwarded-for/);
+    assert.doesNotMatch(serialized, /198\.51\.100\./);
+    assert.doesNotMatch(serialized, /stack/);
+    assert.doesNotMatch(serialized, /https?:\/\//);
+  } finally {
+    addon.resolveEpisode = originalResolveEpisode;
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../addon")];
+  }
 });
