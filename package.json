@@ -5,12 +5,19 @@
   "type": "commonjs",
   "scripts": {
     "start": "node serverless.js",
+    "test:policy:time-window": "node --test tests/policy-time-window.test.js",
+    "test:policy:session-gate": "node --test tests/policy-session-gate.test.js",
+    "test:policy:deterministic": "node --test tests/policy-time-window.test.js tests/policy-session-gate.test.js",
     "test:contract:observability": "node --test tests/contract-observability.test.js",
     "test:contract:reliability": "node --test tests/contract-stream-reliability.test.js",
     "test:contract:manifest-catalog": "node --test tests/contract-manifest-catalog.test.js",
     "test:contract:stream": "node --test tests/contract-stream.test.js",
+    "test:contract:stream:failures": "node --test tests/contract-stream-failures.test.js",
     "test:contract:security": "node --test tests/contract-security-boundary.test.js",
-    "test:contract:cors": "node --test tests/contract-cors-policy.test.js"
+    "test:contract:cors": "node --test tests/contract-cors-policy.test.js",
+    "test:gate:required": "node --test tests/contract-stream.test.js tests/contract-stream-reliability.test.js tests/contract-stream-failures.test.js tests/policy-time-window.test.js tests/policy-session-gate.test.js",
+    "test:gate:optional": "npm run test:contract:manifest-catalog && npm run test:contract:security && npm run test:contract:cors && npm run test:contract:observability",
+    "test:gate:all": "npm run test:gate:required && npm run test:gate:optional"
   },
   "dependencies": {
     "pino": "^10.3.1",
