@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 5 of 5 (Modularization and Test Governance)
-Plan: 3 of 6 in current phase
+Plan: 4 of 6 in current phase
 Status: In progress
-Last activity: 2026-02-22 - Completed 05-03-PLAN.md.
+Last activity: 2026-02-22 - Completed 05-04-PLAN.md.
 
-Progress: ████████░░ 80%
+Progress: █████████░ 87%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
-- Average duration: 2 min
-- Total execution time: 0.5 hours
+- Total plans completed: 13
+- Average duration: 3 min
+- Total execution time: 0.6 hours
 
 **By Phase:**
 
@@ -31,10 +31,10 @@ Progress: ████████░░ 80%
 | 2. Security Boundary Hardening | 2 | 4 min | 2 min |
 | 3. Stream Reliability Controls | 2 | 3 min | 2 min |
 | 4. Observability and Diagnostics | 3 | 11 min | 4 min |
-| 5. Modularization and Test Governance | 3 | 8 min | 3 min |
+| 5. Modularization and Test Governance | 4 | 14 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: Phase 04 Plan 02 (3 min), Phase 04 Plan 03 (2 min), Phase 05 Plan 01 (2 min), Phase 05 Plan 02 (2 min), Phase 05 Plan 03 (4 min)
+- Last 5 plans: Phase 04 Plan 03 (2 min), Phase 05 Plan 01 (2 min), Phase 05 Plan 02 (2 min), Phase 05 Plan 03 (4 min), Phase 05 Plan 04 (6 min)
 - Trend: Stable
 
 ## Accumulated Context
@@ -77,6 +77,8 @@ Recent decisions affecting current work:
 - [Phase 05]: `modules/index.js` is the canonical export map for scaffold discoverability across policy/integration/routing/presentation.
 - [Phase 05]: Request-control reason codes and policy telemetry outcomes remain unchanged while admission wiring is moved into modular routing composition.
 - [Phase 05]: Serverless entrypoint keeps request controls as thin dependency composition, avoiding embedded reusable admission logic.
+- [Phase 05]: Stream orchestration and latest-selection handling live in `modules/routing/stream-route.js`, with `serverless.js` limited to dependency composition and transport lifecycle.
+- [Phase 05]: Redis integration resolves runtime config/fetch per command to preserve observability degraded-branch behavior under contract tests.
 
 ### Pending Todos
 
@@ -88,6 +90,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 13:25
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-02-22 13:42
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None
