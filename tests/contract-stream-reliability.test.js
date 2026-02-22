@@ -248,6 +248,9 @@ test("broker resolve retries once on transient HTTP failure", async () => {
 
 test("broker resolve timeout path stays within bounded retry budget", async () => {
   process.env.B_BASE_URL = "https://broker.example";
+  process.env.BROKER_ATTEMPT_TIMEOUT_MS = "1800";
+  process.env.BROKER_TOTAL_TIMEOUT_MS = "5000";
+  process.env.BROKER_RETRY_JITTER_MS = "150";
   let calls = 0;
 
   const originalFetch = global.fetch;
@@ -273,6 +276,9 @@ test("broker resolve timeout path stays within bounded retry budget", async () =
     assert.equal(calls, 2);
     assert.ok(elapsed < 6200, `expected timeout budget under 6200ms, got ${elapsed}ms`);
   } finally {
+    delete process.env.BROKER_ATTEMPT_TIMEOUT_MS;
+    delete process.env.BROKER_TOTAL_TIMEOUT_MS;
+    delete process.env.BROKER_RETRY_JITTER_MS;
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../addon")];
   }

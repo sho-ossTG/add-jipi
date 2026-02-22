@@ -1,5 +1,5 @@
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 1800;
-const DEFAULT_TOTAL_TIMEOUT_MS = 5000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 4000;
+const DEFAULT_TOTAL_TIMEOUT_MS = 12000;
 const DEFAULT_RETRY_JITTER_MS = 150;
 
 function parsePositiveInteger(value, fallback) {
