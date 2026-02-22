@@ -353,27 +353,6 @@ const streamRouteDependencies = Object.freeze({
   fallbackVideoUrl: TEST_VIDEO_URL
 });
 
-async function onStreamError({ error, ip, episodeId }) {
-  try {
-    await redisCommand(["INCR", "stats:broker_error"]);
-  } catch {
-    // Best-effort metric path.
-  }
-
-  const event = {
-    ip,
-    error: error.message,
-    episodeId,
-    time: new Date().toISOString()
-  };
-  try {
-    await redisCommand(["LPUSH", "quarantine:events", JSON.stringify(event)]);
-    await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
-  } catch {
-    // Best-effort quarantine path.
-  }
-}
-
 function getLandingPageHtml() {
   return `
 <!DOCTYPE html>
@@ -614,7 +593,27 @@ module.exports = async function (req, res) {
             },
             {
               ...streamRouteDependencies,
-              onStreamError
+              onStreamError: async ({ error, ip, episodeId }) => {
+                try {
+                  await redisCommand(["INCR", "stats:broker_error"]);
+                } catch {
+                  // Best-effort metric path.
+                }
+
+                const event = {
+                  ip,
+                  error: error.message,
+                  episodeId,
+                  time: new Date().toISOString()
+                };
+
+                try {
+                  await redisCommand(["LPUSH", "quarantine:events", JSON.stringify(event)]);
+                  await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
+                } catch {
+                  // Best-effort quarantine path.
+                }
+              }
             }
           );
           if (streamResult && streamResult.handled) {
