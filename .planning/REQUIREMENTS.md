@@ -34,9 +34,9 @@ Requirements for initial release hardening. Each maps to roadmap phases.
 
 ### Maintainability & Quality
 
-- [ ] **MAINT-01**: Maintainer can modify routing, policy, integration, and presentation code in separate modules with clear boundaries.
-- [ ] **MAINT-02**: Maintainer can run automated tests covering stream contract behavior and failure branches before deployment.
-- [ ] **MAINT-03**: Maintainer can reproduce core policy time-window and session-gating behavior with deterministic tests.
+- [x] **MAINT-01**: Maintainer can modify routing, policy, integration, and presentation code in separate modules with clear boundaries.
+- [x] **MAINT-02**: Maintainer can run automated tests covering stream contract behavior and failure branches before deployment.
+- [x] **MAINT-03**: Maintainer can reproduce core policy time-window and session-gating behavior with deterministic tests.
 
 ## v2 Requirements
 
@@ -79,9 +79,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-01 | Phase 4 | Complete |
 | OBSV-02 | Phase 4 | Complete |
 | OBSV-03 | Phase 4 | Complete |
-| MAINT-01 | Phase 5 | Pending |
-| MAINT-02 | Phase 5 | Pending |
-| MAINT-03 | Phase 5 | Pending |
+| MAINT-01 | Phase 5 | Complete |
+| MAINT-02 | Phase 5 | Complete |
+| MAINT-03 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 16 total
@@ -90,4 +90,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-02-21*
-*Last updated: 2026-02-22 after phase 4 completion*
+*Last updated: 2026-02-22 after phase 5 completion*
