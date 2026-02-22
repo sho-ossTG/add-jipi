@@ -6,9 +6,11 @@
   "scripts": {
     "start": "node serverless.js",
     "test:contract:manifest-catalog": "node --test tests/contract-manifest-catalog.test.js",
-    "test:contract:stream": "node --test tests/contract-stream.test.js"
+    "test:contract:stream": "node --test tests/contract-stream.test.js",
+    "test:contract:security": "node --test tests/contract-security-boundary.test.js"
   },
   "dependencies": {
+    "proxy-addr": "^2.0.7",
     "stremio-addon-sdk": "^1.6.10"
   }
 }
