@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Security Boundary Hardening** - Restrict operational surfaces and enforce trusted request identity.
 - [x] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load. (completed 2026-02-22)
 - [x] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals. (completed 2026-02-22)
-- [ ] **Phase 5: Modularization and Test Governance** - Split core concerns into maintainable modules with reliable automated validation.
+- [x] **Phase 5: Modularization and Test Governance** - Split core concerns into maintainable modules with reliable automated validation. (completed 2026-02-22)
 
 ## Phase Details
 
@@ -90,11 +90,11 @@ Plans:
 
 Plans:
 - [x] 05-01-PLAN.md — Scaffold boundary policy/integration modules and document import-direction rules.
-- [ ] 05-02-PLAN.md — Scaffold routing/presentation module roots and publish module export map.
-- [ ] 05-03-PLAN.md — Rewire request-controls through modular policy/integration boundaries.
-- [ ] 05-04-PLAN.md — Rewire stream orchestration/presentation with thin entrypoint composition.
-- [ ] 05-05-PLAN.md — Modularize operator/public routing and presentation and finalize boundary examples.
-- [ ] 05-06-PLAN.md — Add deterministic policy tests and required pre-deploy contract/failure test gates.
+- [x] 05-02-PLAN.md — Scaffold routing/presentation module roots and publish module export map.
+- [x] 05-03-PLAN.md — Rewire request-controls through modular policy/integration boundaries.
+- [x] 05-04-PLAN.md — Rewire stream orchestration/presentation with thin entrypoint composition.
+- [x] 05-05-PLAN.md — Modularize operator/public routing and presentation and finalize boundary examples.
+- [x] 05-06-PLAN.md — Add deterministic policy tests and required pre-deploy contract/failure test gates.
 
 ## Progress
 
@@ -107,4 +107,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Security Boundary Hardening | 2/2 | Complete    | 2026-02-22 |
 | 3. Stream Reliability Controls | 2/2 | Complete    | 2026-02-22 |
 | 4. Observability and Diagnostics | 3/3 | Complete    | 2026-02-22 |
-| 5. Modularization and Test Governance | 1/6 | In progress | - |
+| 5. Modularization and Test Governance | 6/6 | Complete    | 2026-02-22 |
