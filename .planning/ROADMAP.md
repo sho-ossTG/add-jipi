@@ -13,7 +13,7 @@ This roadmap hardens the existing addon without breaking Stremio compatibility, 
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Contract Compatibility Baseline** - Preserve manifest, catalog, and stream contract behavior for supported episodes.
-- [ ] **Phase 2: Security Boundary Hardening** - Restrict operational surfaces and enforce trusted request identity.
+- [x] **Phase 2: Security Boundary Hardening** - Restrict operational surfaces and enforce trusted request identity.
 - [ ] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load.
 - [ ] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals.
 - [ ] **Phase 5: Modularization and Test Governance** - Split core concerns into maintainable modules with reliable automated validation.
@@ -46,8 +46,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Add operator auth gating, trusted client attribution, and diagnostics/public redaction with security contract tests.
-- [ ] 02-02-PLAN.md — Enforce explicit CORS allowlist and preflight behavior with CORS contract tests.
+- [x] 02-01-PLAN.md — Add operator auth gating, trusted client attribution, and diagnostics/public redaction with security contract tests.
+- [x] 02-02-PLAN.md — Enforce explicit CORS allowlist and preflight behavior with CORS contract tests.
 
 ### Phase 3: Stream Reliability Controls
 **Goal**: Stream resolution remains deterministic and protocol-safe under concurrency and dependency degradation.
@@ -87,7 +87,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Contract Compatibility Baseline | 2/2 | Complete    | 2026-02-21 |
-| 2. Security Boundary Hardening | 0/2 | Not started | - |
+| 2. Security Boundary Hardening | 2/2 | Complete    | 2026-02-22 |
 | 3. Stream Reliability Controls | 0/2 | Not started | - |
 | 4. Observability and Diagnostics | 0/2 | Not started | - |
 | 5. Modularization and Test Governance | 0/2 | Not started | - |

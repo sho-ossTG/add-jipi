@@ -15,9 +15,9 @@ Requirements for initial release hardening. Each maps to roadmap phases.
 
 ### Security
 
-- [ ] **SECU-01**: Operator can access diagnostics routes only after authenticated and authorized admin checks.
-- [ ] **SECU-02**: User requests are attributed to trusted client identity, not spoofable forwarded headers.
-- [ ] **SECU-03**: Sensitive diagnostics data is redacted so public routes never expose raw IPs or internal error details.
+- [x] **SECU-01**: Operator can access diagnostics routes only after authenticated and authorized admin checks.
+- [x] **SECU-02**: User requests are attributed to trusted client identity, not spoofable forwarded headers.
+- [x] **SECU-03**: Sensitive diagnostics data is redacted so public routes never expose raw IPs or internal error details.
 - [ ] **SECU-04**: Browser clients only receive CORS permissions for explicitly allowed origins and headers.
 
 ### Reliability
@@ -69,9 +69,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONT-01 | Phase 1 | Complete |
 | CONT-02 | Phase 1 | Complete |
 | CONT-03 | Phase 1 | Complete |
-| SECU-01 | Phase 2 | Pending |
-| SECU-02 | Phase 2 | Pending |
-| SECU-03 | Phase 2 | Pending |
+| SECU-01 | Phase 2 | Complete |
+| SECU-02 | Phase 2 | Complete |
+| SECU-03 | Phase 2 | Complete |
 | SECU-04 | Phase 2 | Pending |
 | RELY-01 | Phase 3 | Pending |
 | RELY-02 | Phase 3 | Pending |

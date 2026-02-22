@@ -5,37 +5,38 @@
 See: .planning/PROJECT.md (updated 2026-02-21)
 
 **Core value:** Users can reliably request a supported episode and immediately receive a valid playable stream.
-**Current focus:** Phase 1 - Contract Compatibility Baseline
+**Current focus:** Phase 3 - Stream Reliability Controls
 
 ## Current Position
 
-Phase: 1 of 5 (Contract Compatibility Baseline)
+Phase: 2 of 5 (Security Boundary Hardening)
 Plan: 2 of 2 in current phase
 Status: Complete
-Last activity: 2026-02-21 - Completed 01-02 stream contract compatibility baseline.
+Last activity: 2026-02-22 - Recovered 02-01 commit lineage and refreshed summary artifacts.
 
-Progress: [##--------] 20%
+Progress: [####------] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
+- Total plans completed: 4
 - Average duration: 2 min
-- Total execution time: 0.1 hours
+- Total execution time: 0.2 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. Contract Compatibility Baseline | 2 | 3 min | 2 min |
-| 2. Security Boundary Hardening | 0 | 0 min | 0 min |
+| 2. Security Boundary Hardening | 2 | 4 min | 2 min |
 | 3. Stream Reliability Controls | 0 | 0 min | 0 min |
 | 4. Observability and Diagnostics | 0 | 0 min | 0 min |
 | 5. Modularization and Test Governance | 0 | 0 min | 0 min |
 
 **Recent Trend:**
-- Last 5 plans: Phase 01 Plan 01 (1 min), Phase 01 Plan 02 (2 min)
+- Last 5 plans: Phase 01 Plan 01 (1 min), Phase 01 Plan 02 (2 min), Phase 02 Plan 01 (2 min), Phase 02 Plan 02 (2 min)
 - Trend: Stable
+| Phase 02 P01 | 1 min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -50,6 +51,13 @@ Recent decisions affecting current work:
 - [Phase 01]: Validate contract behavior at HTTP handler boundary instead of unit-testing internal helpers
 - [Phase 01]: Constrain addon stream handler to supported One Piece IDs for deterministic unsupported empty-stream responses
 - [Phase 01]: Preserve baseline stream fallback eligibility and non-stream status behavior while improving actionable degraded stream messages
+- [Phase 02]: Gate operator diagnostics routes behind static operator token auth with constant-time comparison checks.
+- [Phase 02]: Derive client identity through trusted proxy attribution instead of raw forwarded-header parsing.
+- [Phase 02]: Keep public liveness minimal while moving dependency diagnostics to operator-only health details.
+- [Phase 02]: Enforce explicit origin/header CORS allowlists with deterministic OPTIONS preflight handling.
+- [Phase 02]: Operator routes are deny-by-default and require OPERATOR_TOKEN with constant-time comparison.
+- [Phase 02]: Client identity is derived through proxy-addr trust policy instead of untrusted x-forwarded-for parsing.
+- [Phase 02]: Public failures return generic service_unavailable payloads while operator diagnostics stay gated.
 
 ### Pending Todos
 
@@ -61,6 +69,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-21 21:40
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-02-22 08:31
+Stopped at: Completed 02-01-PLAN.md (lineage recovery)
 Resume file: None
