@@ -12,14 +12,14 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 Phase: 4 of 5 (Observability and Diagnostics)
 Plan: 1 of 2 in current phase
 Status: In Progress
-Last activity: 2026-02-22 - Completed 03-02 deterministic degraded stream mapping and latest-request-wins reliability behavior.
+Last activity: 2026-02-22 - Completed 04-01-PLAN.md.
 
-Progress: [######----] 60%
+Progress: [#######---] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 7
 - Average duration: 2 min
 - Total execution time: 0.2 hours
 
@@ -30,7 +30,7 @@ Progress: [######----] 60%
 | 1. Contract Compatibility Baseline | 2 | 3 min | 2 min |
 | 2. Security Boundary Hardening | 2 | 4 min | 2 min |
 | 3. Stream Reliability Controls | 2 | 3 min | 2 min |
-| 4. Observability and Diagnostics | 0 | 0 min | 0 min |
+| 4. Observability and Diagnostics | 1 | 6 min | 6 min |
 | 5. Modularization and Test Governance | 0 | 0 min | 0 min |
 
 **Recent Trend:**
@@ -68,6 +68,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Capacity and shutdown-policy denials now return deterministic empty streams with actionable notice text.
 - [Phase 03]: Dependency timeout and unavailable causes map to fixed fallback playable stream messaging from one response table.
 - [Phase 03]: Latest client episode selection is authoritative, preventing stale completion overwrite drift.
+- [Phase 04]: Wrap every request in AsyncLocalStorage context and emit a shared X-Correlation-Id for response and telemetry correlation.
+- [Phase 04]: Emit canonical telemetry shape (event/category/source/cause/correlationId) from observability helpers only to prevent route-level drift.
+- [Phase 04]: Normalize unknown/free-form source labels to canonical broker/redis/validation/policy sources before logging.
 
 ### Pending Todos
 
@@ -79,6 +82,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 10:46
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-02-22 12:29
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
