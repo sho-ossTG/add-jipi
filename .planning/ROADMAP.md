@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load. (completed 2026-02-22)
 - [x] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals. (completed 2026-02-22)
 - [x] **Phase 5: Modularization and Test Governance** - Split core concerns into maintainable modules with reliable automated validation. (completed 2026-02-22)
-- [ ] **Phase 6: Milestone Audit Cleanup** - Close non-blocking audit debt with explicit manual verification runbooks and low-risk cleanup tasks.
+- [x] **Phase 6: Milestone Audit Cleanup** - Close non-blocking audit debt with explicit manual verification runbooks and low-risk cleanup tasks. (completed 2026-02-22)
 
 ## Phase Details
 
@@ -108,9 +108,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 06-01-PLAN.md — Create manual Stremio live-verification checklist and evidence capture workflow.
-- [ ] 06-02-PLAN.md — Create broker/Redis outage verification checklist with commands and expected outcomes.
-- [ ] 06-03-PLAN.md — Resolve `modules/index.js` informational-surface tech debt with low-risk cleanup.
+- [x] 06-01-PLAN.md — Create manual Stremio live-verification checklist and evidence capture workflow.
+- [x] 06-02-PLAN.md — Create broker/Redis outage verification checklist with commands and expected outcomes.
+- [x] 06-03-PLAN.md — Resolve `modules/index.js` informational-surface tech debt with low-risk cleanup.
 
 ## Progress
 
@@ -124,4 +124,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 3. Stream Reliability Controls | 2/2 | Complete    | 2026-02-22 |
 | 4. Observability and Diagnostics | 3/3 | Complete    | 2026-02-22 |
 | 5. Modularization and Test Governance | 6/6 | Complete    | 2026-02-22 |
-| 6. Milestone Audit Cleanup | 0/3 | Not started | - |
+| 6. Milestone Audit Cleanup | 3/3 | Complete    | 2026-02-22 |
