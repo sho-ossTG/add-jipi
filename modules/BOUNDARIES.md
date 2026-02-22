@@ -38,6 +38,13 @@ Entrypoint compatibility during migration:
 - `serverless.js` is a thin adapter that imports `createHttpHandler` from `modules/routing/http-handler.js`.
 - `addon.js` remains the stream resolver integration surface and is consumed by routing/integration boundaries.
 
+## `modules/index.js` role
+
+- `modules/index.js` is intentionally a maintainer-facing manifest, not a runtime dependency surface.
+- Runtime code must import concrete module files directly (for example `modules/routing/http-handler.js`) instead of importing `modules/index.js`.
+- The manifest exists to keep ownership/discoverability explicit during audits and code review.
+- Update `modules/index.js` when module entrypoints are added, renamed, or moved.
+
 ## Post-migration file-level import examples
 
 Final import-direction examples after 05-05 migration:

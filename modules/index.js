@@ -1,22 +1,31 @@
-module.exports = {
+"use strict";
+
+module.exports = Object.freeze({
+  purpose: "maintainer-manifest-only",
+  guidance:
+    "This file is a module ownership/import map for maintainers and review tooling. Do not import from runtime entrypoints.",
   boundaries: {
     map: "./BOUNDARIES.md"
   },
   policy: {
-    timeWindow: require("./policy/time-window"),
-    sessionGate: require("./policy/session-gate"),
-    operatorAuth: require("./policy/operator-auth")
+    timeWindow: "./policy/time-window",
+    sessionGate: "./policy/session-gate",
+    operatorAuth: "./policy/operator-auth"
   },
   integrations: {
-    redisClient: require("./integrations/redis-client"),
-    brokerClient: require("./integrations/broker-client")
+    redisClient: "./integrations/redis-client",
+    brokerClient: "./integrations/broker-client"
   },
   presentation: {
-    streamPayloads: require("./presentation/stream-payloads")
+    streamPayloads: "./presentation/stream-payloads"
   },
   routing: {
-    requestControls: require("./routing/request-controls"),
-    streamRoute: require("./routing/stream-route"),
-    operatorRoutes: require("./routing/operator-routes")
+    requestControls: "./routing/request-controls",
+    streamRoute: "./routing/stream-route",
+    operatorRoutes: "./routing/operator-routes"
+  },
+  maintainerNotes: {
+    updateWhen: "module entrypoints are added, renamed, or moved",
+    runtimeRule: "Runtime code imports concern modules directly (for example ./routing/http-handler)."
   }
-};
+});
