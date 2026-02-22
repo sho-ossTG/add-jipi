@@ -179,6 +179,10 @@ function isStremioRoute(pathname) {
   return pathname === "/manifest.json" || pathname.startsWith("/catalog/") || pathname.startsWith("/stream/");
 }
 
+function isGatedStreamRoute(pathname) {
+  return pathname.startsWith("/stream/");
+}
+
 function classifyRoute(pathname) {
   if (
     pathname === "/quarantine" ||
@@ -327,7 +331,7 @@ async function recordReliabilityOutcome(routeClass, payload = {}) {
 }
 
 const requestControlDependencies = Object.freeze({
-  isStremioRoute,
+  isStremioRoute: isGatedStreamRoute,
   getTrustedClientIp,
   redisCommand,
   redisEval,

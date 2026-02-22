@@ -70,3 +70,19 @@ test("GET unsupported stream id returns empty streams payload", async () => {
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.body, { streams: [] });
 });
+
+test("manifest and catalog stay available when stream slot gate is blocked", async () => {
+  const manifestResponse = await request("/manifest.json", { mode: "slot-blocked" });
+  assert.equal(manifestResponse.statusCode, 200);
+  assert.equal(manifestResponse.body.id, "org.jipi.onepiece");
+
+  const catalogResponse = await request("/catalog/series/onepiece_catalog.json", { mode: "slot-blocked" });
+  assert.equal(catalogResponse.statusCode, 200);
+  assert.ok(Array.isArray(catalogResponse.body.metas));
+  assert.ok(catalogResponse.body.metas.length > 0);
+
+  const streamResponse = await request("/stream/series/tt0388629%3A1%3A1.json", { mode: "slot-blocked" });
+  assert.equal(streamResponse.statusCode, 200);
+  assert.deepEqual(streamResponse.body.streams, []);
+  assert.match(streamResponse.body.notice, /capacity is currently full/i);
+});
