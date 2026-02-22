@@ -24,11 +24,20 @@ function createResponse() {
 }
 
 function mockRedisFetch() {
-  return async function fetch() {
+  return async function fetch(_url, options = {}) {
+    const payload = JSON.parse(options.body || "[]");
+    const command = Array.isArray(payload) ? payload[0] : [];
+    const op = command[0];
+    let result = "PONG";
+
+    if (op === "EVAL") {
+      result = [1, "admitted:new", "", 1];
+    }
+
     return {
       ok: true,
       async json() {
-        return [{ result: "PONG" }];
+        return [{ result }];
       }
     };
   };

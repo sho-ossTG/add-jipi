@@ -29,6 +29,7 @@ function mockRedisFetch() {
 
     if (op === "PING") result = "PONG";
     if (op === "GET") result = "1";
+    if (op === "EVAL") result = [1, "admitted:new", "", 1];
     if (op === "ZSCORE") result = "1";
     if (op === "ZCARD") result = 1;
 

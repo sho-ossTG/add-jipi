@@ -35,6 +35,12 @@ function mockRedisFetch(mode = "allow") {
       else result = "1";
     }
 
+    if (op === "EVAL") {
+      result = mode === "slot-blocked"
+        ? [0, "blocked:slot_taken", "", 2]
+        : [1, "admitted:new", "", 1];
+    }
+
     if (op === "ZSCORE") result = mode === "slot-blocked" ? null : "1";
     if (op === "ZCARD") result = mode === "slot-blocked" ? 2 : 1;
     if (op === "PING") result = "PONG";

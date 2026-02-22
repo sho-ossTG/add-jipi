@@ -66,6 +66,11 @@ function createRedisMock(options = {}) {
     let result = "OK";
 
     if (op === "PING") result = "PONG";
+    if (op === "EVAL") {
+      const currentIp = command[4];
+      recordedIps.push(currentIp);
+      result = [1, "admitted:new", "", 1];
+    }
     if (op === "GET") {
       if (String(key || "").startsWith("system:reset:")) result = "1";
       else if (String(key || "").startsWith("active:url:")) result = null;
