@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 Phase: 2 of 5 (Security Boundary Hardening)
 Plan: 2 of 2 in current phase
 Status: Complete
-Last activity: 2026-02-22 - Recovered 02-01 commit lineage and refreshed summary artifacts.
+Last activity: 2026-02-22 - Recovered 02-02 commit lineage with task-level commits and refreshed summary/state artifacts.
 
 Progress: [####------] 40%
 
@@ -37,6 +37,7 @@ Progress: [####------] 40%
 - Last 5 plans: Phase 01 Plan 01 (1 min), Phase 01 Plan 02 (2 min), Phase 02 Plan 01 (2 min), Phase 02 Plan 02 (2 min)
 - Trend: Stable
 | Phase 02 P01 | 1 min | 3 tasks | 4 files |
+| Phase 02 P02 | 8 min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -58,6 +59,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Operator routes are deny-by-default and require OPERATOR_TOKEN with constant-time comparison.
 - [Phase 02]: Client identity is derived through proxy-addr trust policy instead of untrusted x-forwarded-for parsing.
 - [Phase 02]: Public failures return generic service_unavailable payloads while operator diagnostics stay gated.
+- [Phase 02]: Reflect CORS allow-origin only for explicitly allowlisted origins with Vary: Origin.
+- [Phase 02]: Reject preflight requests when access-control-request-method is outside CORS_ALLOW_METHODS.
 
 ### Pending Todos
 
@@ -69,6 +72,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 08:31
-Stopped at: Completed 02-01-PLAN.md (lineage recovery)
+Last session: 2026-02-22 08:34
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
