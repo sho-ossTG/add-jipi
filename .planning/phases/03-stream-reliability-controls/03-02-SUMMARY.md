@@ -59,6 +59,8 @@ Each task was committed atomically:
 2. **Task 2: Enforce latest-request-wins behavior for rapid episode switching** - `bd7453a` (feat)
 3. **Task 3: Expand reliability contracts for degraded determinism and latest-wins flow** - `14ca08e` (test)
 
+**Plan metadata:** Recorded in a follow-up docs commit for planning artifacts.
+
 ## Files Created/Modified
 - `serverless.js` - Added deterministic degraded mapping, centralized cause classification, and latest selection arbitration with stale-selection pruning.
 - `tests/contract-stream-reliability.test.js` - Added deterministic cause mapping and latest-request-wins contract coverage.
