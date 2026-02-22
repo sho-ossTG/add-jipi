@@ -14,8 +14,12 @@ const {
   classifyFailure
 } = require("./observability/events");
 const {
-  incrementReliabilityCounter
+  incrementReliabilityCounter,
+  readReliabilitySummary
 } = require("./observability/metrics");
+const {
+  projectOperatorMetrics
+} = require("./observability/diagnostics");
 
 const router = getRouter(addonInterface);
 
@@ -1023,6 +1027,25 @@ module.exports = async function (req, res) {
         } catch {
           setReliabilityOutcome({ source: "redis", cause: "dependency_unavailable", result: "failure" });
           sendJson(req, res, 503, { status: "FAIL", error: "dependency_unavailable" });
+        }
+        return;
+      }
+
+      if (pathname === "/operator/metrics") {
+        try {
+          await redisCommand(["PING"]);
+          const reliability = await readReliabilitySummary(redisCommand);
+          setReliabilityOutcome({ source: "redis", cause: "success", result: "success" });
+          sendJson(req, res, 200, projectOperatorMetrics({
+            redisStatus: "connected",
+            reliability
+          }));
+        } catch {
+          setReliabilityOutcome({ source: "redis", cause: "dependency_unavailable", result: "failure" });
+          sendJson(req, res, 503, projectOperatorMetrics({
+            redisStatus: "unavailable",
+            reliability: {}
+          }));
         }
         return;
       }
