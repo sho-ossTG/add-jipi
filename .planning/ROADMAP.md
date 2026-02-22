@@ -57,7 +57,11 @@ Plans:
   1. Concurrent stream requests enforce capacity/session policy atomically without inconsistent admission outcomes.
   2. Stream-path dependency calls complete within bounded time (timeouts/retry limits) rather than hanging requests.
   3. When broker or Redis fails, users still receive deterministic protocol-safe fallback behavior.
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Implement atomic concurrency gating and bounded dependency execution with reliability contract tests.
+- [ ] 03-02-PLAN.md — Enforce deterministic degraded response mapping and latest-request-wins reliability behavior.
 
 ### Phase 4: Observability and Diagnostics
 **Goal**: Operators can quickly diagnose failed or degraded behavior through correlated, structured, and safely exposed telemetry.
