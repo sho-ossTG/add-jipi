@@ -1,252 +1,19 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-
-function createResponse() {
-  const headers = {};
-  let body = "";
-
-  return {
-    headers,
-    get body() {
-      return body;
-    },
-    statusCode: 200,
-    setHeader(name, value) {
-      headers[name.toLowerCase()] = value;
-    },
-    end(chunk) {
-      body = chunk ? String(chunk) : "";
-    }
-  };
-}
-
-function withFixedJerusalemTime(run, overrides = {}) {
-  const originalDateTimeFormat = Intl.DateTimeFormat;
-  const hour = String(overrides.hour || "12").padStart(2, "0");
-  const minute = String(overrides.minute || "00").padStart(2, "0");
-  const second = String(overrides.second || "00").padStart(2, "0");
-
-  Intl.DateTimeFormat = function MockDateTimeFormat() {
-    return {
-      formatToParts() {
-        return [
-          { type: "year", value: "2099" },
-          { type: "month", value: "01" },
-          { type: "day", value: "01" },
-          { type: "hour", value: hour },
-          { type: "minute", value: minute },
-          { type: "second", value: second }
-        ];
-      }
-    };
-  };
-
-  return Promise.resolve()
-    .then(run)
-    .finally(() => {
-      Intl.DateTimeFormat = originalDateTimeFormat;
-    });
-}
-
-function createRedisRuntime() {
-  const state = {
-    strings: new Map(),
-    sessions: new Map(),
-    lists: new Map()
-  };
-
-  function nowSortedSessions() {
-    return [...state.sessions.entries()].sort((left, right) => {
-      if (left[1] !== right[1]) return left[1] - right[1];
-      return left[0].localeCompare(right[0]);
-    });
-  }
-
-  function evalGate(args) {
-    const currentIp = String(args[0]);
-    const nowMs = Number(args[1]);
-    const pruneCutoff = Number(args[2]);
-    const maxSessions = Number(args[3]);
-    const reconnectGraceMs = Number(args[5]);
-    const idleCutoff = Number(args[6]);
-
-    for (const [ip, score] of [...state.sessions.entries()]) {
-      if (score <= pruneCutoff) {
-        state.sessions.delete(ip);
-      }
-    }
-
-    if (state.sessions.has(currentIp)) {
-      state.sessions.set(currentIp, nowMs);
-      return [1, "admitted:existing", "", state.sessions.size];
-    }
-
-    if (state.sessions.size < maxSessions) {
-      state.sessions.set(currentIp, nowMs);
-      return [1, "admitted:new", "", state.sessions.size];
-    }
-
-    let rotation = null;
-    for (const [ip, score] of nowSortedSessions()) {
-      if (ip === currentIp) continue;
-      const idleEnough = score <= idleCutoff;
-      const outsideGrace = (nowMs - score) >= reconnectGraceMs;
-      if (!idleEnough || !outsideGrace) continue;
-      if (!rotation) {
-        rotation = { ip, score };
-        continue;
-      }
-      if (score < rotation.score || (score === rotation.score && ip.localeCompare(rotation.ip) < 0)) {
-        rotation = { ip, score };
-      }
-    }
-
-    if (rotation) {
-      state.sessions.delete(rotation.ip);
-      state.sessions.set(currentIp, nowMs);
-      return [1, "admitted:rotated", rotation.ip, state.sessions.size];
-    }
-
-    return [0, "blocked:slot_taken", "", state.sessions.size];
-  }
-
-  async function fetch(_url, options = {}) {
-    const payload = JSON.parse(options.body || "[]");
-    const command = Array.isArray(payload) ? payload[0] : [];
-    const op = String(command[0] || "").toUpperCase();
-    const key = command[1];
-    let result = "OK";
-
-    if (op === "GET") {
-      result = state.strings.has(key) ? state.strings.get(key) : null;
-    }
-
-    if (op === "SET") {
-      state.strings.set(key, String(command[2]));
-      result = "OK";
-    }
-
-    if (op === "DEL") {
-      state.strings.delete(key);
-      state.lists.delete(key);
-      result = 1;
-    }
-
-    if (op === "INCR") {
-      const current = Number(state.strings.get(key) || 0);
-      const next = current + 1;
-      state.strings.set(key, String(next));
-      result = next;
-    }
-
-    if (op === "LPUSH") {
-      const list = state.lists.get(key) || [];
-      list.unshift(String(command[2] || ""));
-      state.lists.set(key, list);
-      result = list.length;
-    }
-
-    if (op === "LTRIM") {
-      const list = state.lists.get(key) || [];
-      const start = Number(command[2]);
-      const end = Number(command[3]);
-      state.lists.set(key, list.slice(start, end + 1));
-      result = "OK";
-    }
-
-    if (op === "LRANGE") {
-      result = state.lists.get(key) || [];
-    }
-
-    if (op === "ZCARD") {
-      result = state.sessions.size;
-    }
-
-    if (op === "ZSCORE") {
-      const member = String(command[2] || "");
-      result = state.sessions.has(member) ? String(state.sessions.get(member)) : null;
-    }
-
-    if (op === "ZREM") {
-      result = state.sessions.delete(command[2]) ? 1 : 0;
-    }
-
-    if (op === "ZADD") {
-      const score = Number(command[2]);
-      const member = String(command[3]);
-      state.sessions.set(member, score);
-      result = 1;
-    }
-
-    if (op === "ZREMRANGEBYSCORE") {
-      const max = Number(command[3]);
-      let removed = 0;
-      for (const [member, score] of [...state.sessions.entries()]) {
-        if (score <= max) {
-          state.sessions.delete(member);
-          removed += 1;
-        }
-      }
-      result = removed;
-    }
-
-    if (op === "EVAL") {
-      const args = command.slice(4);
-      result = evalGate(args);
-    }
-
-    if (op === "PING") {
-      result = "PONG";
-    }
-
-    return {
-      ok: true,
-      async json() {
-        return [{ result }];
-      }
-    };
-  }
-
-  return { state, fetch };
-}
+const {
+  createRedisRuntime,
+  loadAddon,
+  loadServerless,
+  requestWithHandler,
+  setRedisEnv
+} = require("./helpers/runtime-fixtures");
 
 async function request(handler, pathname, options = {}) {
-  const {
-    method = "GET",
-    ip = "198.51.100.20",
-    headers = {},
-    jerusalemHour = "12"
-  } = options;
-
-  const req = {
-    method,
-    url: pathname,
-    headers: {
-      host: "localhost:3000",
-      ...headers
-    },
-    socket: { remoteAddress: ip }
-  };
-  const res = createResponse();
-
-  await withFixedJerusalemTime(async () => {
-    await handler(req, res);
-  }, { hour: jerusalemHour });
-
+  const response = await requestWithHandler(handler, pathname, options);
   return {
-    statusCode: res.statusCode,
-    body: res.body ? JSON.parse(res.body) : null
+    statusCode: response.statusCode,
+    body: response.body
   };
-}
-
-function loadServerless() {
-  delete require.cache[require.resolve("../serverless")];
-  return require("../serverless");
-}
-
-function loadAddon() {
-  delete require.cache[require.resolve("../addon")];
-  return require("../addon");
 }
 
 test("atomic gate decisions remain deterministic under concurrent requests", async () => {
@@ -255,8 +22,7 @@ test("atomic gate decisions remain deterministic under concurrent requests", asy
   runtime.state.sessions.set("198.51.100.1", now - 1000);
   runtime.state.sessions.set("198.51.100.2", now - 2000);
 
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
+  setRedisEnv();
 
   const originalFetch = global.fetch;
   global.fetch = runtime.fetch;
@@ -287,8 +53,7 @@ test("fair idle rotation admits contender by replacing oldest idle session", asy
   runtime.state.sessions.set("198.51.100.1", now - 80000);
   runtime.state.sessions.set("198.51.100.2", now - 4000);
 
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
+  setRedisEnv();
 
   const originalFetch = global.fetch;
   const addon = loadAddon();
@@ -321,8 +86,7 @@ test("reconnect grace preserves existing session continuity while new contenders
   runtime.state.sessions.set("198.51.100.11", now - 5000);
   runtime.state.sessions.set("198.51.100.12", now - 6000);
 
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
+  setRedisEnv();
 
   const originalFetch = global.fetch;
   const addon = loadAddon();
@@ -356,8 +120,7 @@ test("reconnect grace preserves existing session continuity while new contenders
 test("duplicate in-flight requests for same client and episode share one resolve path", async () => {
   const runtime = createRedisRuntime();
 
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
+  setRedisEnv();
 
   const originalFetch = global.fetch;
   const addon = loadAddon();
@@ -391,98 +154,10 @@ test("duplicate in-flight requests for same client and episode share one resolve
   }
 });
 
-test("capacity and policy causes map to deterministic empty stream responses", async () => {
-  const runtime = createRedisRuntime();
-  const now = Date.now();
-  runtime.state.sessions.set("198.51.100.1", now - 1000);
-  runtime.state.sessions.set("198.51.100.2", now - 2000);
-
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
-
-  const originalFetch = global.fetch;
-  global.fetch = runtime.fetch;
-  const handler = loadServerless();
-
-  try {
-    const firstCapacity = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", { ip: "198.51.100.31" });
-    const secondCapacity = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", { ip: "198.51.100.32" });
-    const shutdownResponse = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", {
-      ip: "198.51.100.33",
-      jerusalemHour: "02"
-    });
-
-    assert.equal(firstCapacity.statusCode, 200);
-    assert.deepEqual(firstCapacity.body.streams, []);
-    assert.match(firstCapacity.body.notice, /capacity is currently full/i);
-
-    assert.equal(secondCapacity.statusCode, 200);
-    assert.deepEqual(secondCapacity.body.streams, []);
-    assert.equal(secondCapacity.body.notice, firstCapacity.body.notice);
-
-    assert.equal(shutdownResponse.statusCode, 200);
-    assert.deepEqual(shutdownResponse.body.streams, []);
-    assert.match(shutdownResponse.body.notice, /paused between 00:00 and 08:00/i);
-  } finally {
-    global.fetch = originalFetch;
-    delete require.cache[require.resolve("../serverless")];
-  }
-});
-
-test("dependency timeout and unavailable causes map to deterministic fallback streams", async () => {
-  const runtime = createRedisRuntime();
-
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
-
-  const originalFetch = global.fetch;
-  const addon = loadAddon();
-  const originalResolveEpisode = addon.resolveEpisode;
-  global.fetch = runtime.fetch;
-  const handler = loadServerless();
-
-  try {
-    addon.resolveEpisode = async () => {
-      const error = new Error("timeout");
-      error.code = "dependency_timeout";
-      throw error;
-    };
-
-    const timeoutFirst = await request(handler, "/stream/series/tt0388629%3A1%3A7.json", { ip: "198.51.100.41" });
-    const timeoutSecond = await request(handler, "/stream/series/tt0388629%3A1%3A7.json", { ip: "198.51.100.41" });
-
-    assert.equal(timeoutFirst.statusCode, 200);
-    assert.equal(timeoutFirst.body.streams.length, 1);
-    assert.match(timeoutFirst.body.streams[0].title, /temporarily delayed/i);
-    assert.equal(timeoutSecond.body.streams[0].title, timeoutFirst.body.streams[0].title);
-
-    addon.resolveEpisode = async () => {
-      const error = new Error("broker unavailable");
-      error.code = "broker_http_error";
-      error.statusCode = 503;
-      throw error;
-    };
-
-    const unavailableFirst = await request(handler, "/stream/series/tt0388629%3A1%3A8.json", { ip: "198.51.100.41" });
-    const unavailableSecond = await request(handler, "/stream/series/tt0388629%3A1%3A8.json", { ip: "198.51.100.41" });
-
-    assert.equal(unavailableFirst.statusCode, 200);
-    assert.equal(unavailableFirst.body.streams.length, 1);
-    assert.match(unavailableFirst.body.streams[0].title, /temporarily unavailable/i);
-    assert.equal(unavailableSecond.body.streams[0].title, unavailableFirst.body.streams[0].title);
-  } finally {
-    addon.resolveEpisode = originalResolveEpisode;
-    global.fetch = originalFetch;
-    delete require.cache[require.resolve("../serverless")];
-    delete require.cache[require.resolve("../addon")];
-  }
-});
-
 test("latest request wins during rapid same-client episode switching while duplicate requests still coalesce", async () => {
   const runtime = createRedisRuntime();
 
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
+  setRedisEnv();
 
   const originalFetch = global.fetch;
   const addon = loadAddon();

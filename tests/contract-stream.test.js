@@ -1,117 +1,31 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-
-function createResponse() {
-  const headers = {};
-  let body = "";
-
-  return {
-    headers,
-    get body() {
-      return body;
-    },
-    statusCode: 200,
-    setHeader(name, value) {
-      headers[name.toLowerCase()] = value;
-    },
-    end(chunk) {
-      body = chunk ? String(chunk) : "";
-    }
-  };
-}
-
-function mockRedisFetch(mode = "allow") {
-  return async function fetch(url, options = {}) {
-    const payload = JSON.parse(options.body || "[]");
-    const command = Array.isArray(payload) ? payload[0] : [];
-    const op = command[0];
-    const key = command[1];
-    let result = "OK";
-
-    if (op === "GET") {
-      if (key === "system:reset:2099-01-01") result = "1";
-      else if (String(key || "").startsWith("active:url:")) result = null;
-      else if (String(key || "").startsWith("stats:")) result = 0;
-      else result = "1";
-    }
-
-    if (op === "EVAL") {
-      result = mode === "slot-blocked"
-        ? [0, "blocked:slot_taken", "", 2]
-        : [1, "admitted:new", "", 1];
-    }
-
-    if (op === "ZSCORE") result = mode === "slot-blocked" ? null : "1";
-    if (op === "ZCARD") result = mode === "slot-blocked" ? 2 : 1;
-    if (op === "PING") result = "PONG";
-
-    return {
-      ok: true,
-      async json() {
-        return [{ result }];
-      }
-    };
-  };
-}
-
-function withFixedJerusalemTime(run) {
-  const originalDateTimeFormat = Intl.DateTimeFormat;
-
-  Intl.DateTimeFormat = function MockDateTimeFormat() {
-    return {
-      formatToParts() {
-        return [
-          { type: "year", value: "2099" },
-          { type: "month", value: "01" },
-          { type: "day", value: "01" },
-          { type: "hour", value: "12" },
-          { type: "minute", value: "00" },
-          { type: "second", value: "00" }
-        ];
-      }
-    };
-  };
-
-  return Promise.resolve()
-    .then(run)
-    .finally(() => {
-      Intl.DateTimeFormat = originalDateTimeFormat;
-    });
-}
+const {
+  createMockRedisFetch,
+  loadAddon,
+  loadServerless,
+  requestWithHandler,
+  setRedisEnv
+} = require("./helpers/runtime-fixtures");
 
 async function request(pathname, options = {}) {
   const { mode = "allow", resolveEpisode } = options;
-
-  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
-  process.env.KV_REST_API_TOKEN = "token";
+  setRedisEnv();
 
   const originalFetch = global.fetch;
-  global.fetch = mockRedisFetch(mode);
+  global.fetch = createMockRedisFetch(mode);
 
-  const addon = require("../addon");
+  const addon = loadAddon();
   const originalResolveEpisode = addon.resolveEpisode;
   if (resolveEpisode) addon.resolveEpisode = resolveEpisode;
 
-  delete require.cache[require.resolve("../serverless")];
-  const handler = require("../serverless");
-
-  const req = {
-    method: "GET",
-    url: pathname,
-    headers: { host: "localhost:3000", "x-forwarded-for": "203.0.113.1" },
-    socket: { remoteAddress: "203.0.113.1" }
-  };
-  const res = createResponse();
+  const handler = loadServerless();
 
   try {
-    await withFixedJerusalemTime(async () => {
-      await handler(req, res);
+    return await requestWithHandler(handler, pathname, {
+      ip: "203.0.113.1",
+      headers: { "x-forwarded-for": "203.0.113.1" }
     });
-    return {
-      statusCode: res.statusCode,
-      headers: res.headers,
-      body: res.body ? JSON.parse(res.body) : null
-    };
   } finally {
     global.fetch = originalFetch;
     addon.resolveEpisode = originalResolveEpisode;
