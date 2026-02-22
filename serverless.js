@@ -13,6 +13,9 @@ const {
   emitEvent,
   classifyFailure
 } = require("./observability/events");
+const {
+  incrementReliabilityCounter
+} = require("./observability/metrics");
 
 const router = getRouter(addonInterface);
 
@@ -270,7 +273,12 @@ function isStremioRoute(pathname) {
 }
 
 function classifyRoute(pathname) {
-  if (pathname === "/quarantine" || pathname === "/health/details" || pathname.startsWith("/admin/")) {
+  if (
+    pathname === "/quarantine" ||
+    pathname === "/health/details" ||
+    pathname.startsWith("/operator/") ||
+    pathname.startsWith("/admin/")
+  ) {
     return "operator";
   }
   if (isStremioRoute(pathname)) {
@@ -431,6 +439,32 @@ function classifyReliabilityCause(errorOrReason) {
   if (classification.cause === "capacity_busy") return "capacity_busy";
   if (classification.cause === "dependency_timeout") return "dependency_timeout";
   return "dependency_unavailable";
+}
+
+function normalizeReliabilityResult(statusCode, fallbackResult = "success") {
+  const numericStatus = Number(statusCode || 0);
+  if (numericStatus >= 500) return "failure";
+  if (numericStatus >= 400) return "failure";
+  return fallbackResult;
+}
+
+function normalizeReliabilitySource(source, cause) {
+  return classifyFailure({ source, cause }).source;
+}
+
+async function recordReliabilityOutcome(routeClass, payload = {}) {
+  const labels = {
+    source: normalizeReliabilitySource(payload.source || "policy", payload.cause),
+    cause: payload.cause || "success",
+    routeClass,
+    result: payload.result || "success"
+  };
+
+  try {
+    await incrementReliabilityCounter(redisCommand, labels);
+  } catch {
+    // Reliability counters are best-effort and must not affect responses.
+  }
 }
 
 function buildDegradedStreamPayload(causeInput) {
@@ -806,14 +840,29 @@ async function handleStreamRequest(req, res, pathname, ip) {
     const result = await resolveLatestStreamIntent(ip, episodeId);
 
     if (result.status === "degraded") {
+      const degraded = classifyFailure({ reason: result.cause || "dependency_unavailable", source: "broker" });
       sendDegradedStream(req, res, result.cause);
-      return true;
+      return {
+        handled: true,
+        outcome: {
+          source: degraded.source,
+          cause: degraded.cause,
+          result: "degraded"
+        }
+      };
     }
 
     sendJson(req, res, 200, {
       streams: [formatStream(result.title, result.url)]
     });
-    return true;
+    return {
+      handled: true,
+      outcome: {
+        source: "broker",
+        cause: "success",
+        result: "success"
+      }
+    };
   } catch (err) {
     try {
       await redisCommand(["INCR", "stats:broker_error"]);
@@ -833,7 +882,15 @@ async function handleStreamRequest(req, res, pathname, ip) {
     } catch (redisErr) { }
 
     sendDegradedStream(req, res, err);
-    return true;
+    const degraded = classifyFailure({ error: err, source: "broker" });
+    return {
+      handled: true,
+      outcome: {
+        source: degraded.source,
+        cause: degraded.cause,
+        result: "degraded"
+      }
+    };
   } finally {
     pruneLatestSelections();
   }
@@ -901,6 +958,15 @@ module.exports = async function (req, res) {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const pathname = reqUrl.pathname;
     const routeType = classifyRoute(pathname);
+    let reliabilityOutcome = null;
+
+    function setReliabilityOutcome(outcome = {}) {
+      reliabilityOutcome = {
+        source: outcome.source || (reliabilityOutcome && reliabilityOutcome.source) || "policy",
+        cause: outcome.cause || (reliabilityOutcome && reliabilityOutcome.cause) || "success",
+        result: outcome.result || (reliabilityOutcome && reliabilityOutcome.result) || "success"
+      };
+    }
 
     emitTelemetry(EVENTS.REQUEST_START, {
       source: "policy",
@@ -923,12 +989,18 @@ module.exports = async function (req, res) {
           allowed: Boolean(authz.allowed)
         });
         if (!authz.allowed) {
+          setReliabilityOutcome({
+            source: "policy",
+            cause: authz.error || "operator_forbidden",
+            result: "failure"
+          });
           sendJson(req, res, authz.statusCode, { error: authz.error });
           return;
         }
       }
 
       if (pathname === "/") {
+        setReliabilityOutcome({ source: "policy", cause: "success", result: "success" });
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/html");
         applyCors(req, res);
@@ -938,6 +1010,7 @@ module.exports = async function (req, res) {
       }
 
       if (pathname === "/health") {
+        setReliabilityOutcome({ source: "policy", cause: "success", result: "success" });
         sendJson(req, res, 200, { status: "OK" });
         return;
       }
@@ -945,8 +1018,10 @@ module.exports = async function (req, res) {
       if (pathname === "/health/details") {
         try {
           await redisCommand(["PING"]);
+          setReliabilityOutcome({ source: "redis", cause: "success", result: "success" });
           sendJson(req, res, 200, { status: "OK", redis: "connected" });
         } catch {
+          setReliabilityOutcome({ source: "redis", cause: "dependency_unavailable", result: "failure" });
           sendJson(req, res, 503, { status: "FAIL", error: "dependency_unavailable" });
         }
         return;
@@ -955,7 +1030,9 @@ module.exports = async function (req, res) {
       if (pathname === "/quarantine") {
         try {
           await handleQuarantine(req, res);
+          setReliabilityOutcome({ source: "redis", cause: "success", result: "success" });
         } catch {
+          setReliabilityOutcome({ source: "redis", cause: "internal_error", result: "failure" });
           sendJson(req, res, 500, { error: "internal_error" });
         }
         return;
@@ -965,23 +1042,32 @@ module.exports = async function (req, res) {
         const controlResult = await applyRequestControls(req, pathname);
 
         if (!controlResult.allowed) {
+          const deniedCause = classifyReliabilityCause(controlResult.reason || "blocked:slot_taken");
           if (pathname.startsWith("/stream/")) {
+            setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "degraded" });
             sendDegradedStream(req, res, controlResult.reason);
             return;
           }
+          setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "failure" });
           sendPublicError(req, res, 503);
           return;
         }
 
         if (pathname.startsWith("/stream/")) {
-          const handled = await handleStreamRequest(req, res, pathname, controlResult.ip || getTrustedClientIp(req));
-          if (handled) return;
+          const streamResult = await handleStreamRequest(req, res, pathname, controlResult.ip || getTrustedClientIp(req));
+          if (streamResult && streamResult.handled) {
+            setReliabilityOutcome(streamResult.outcome || {});
+            return;
+          }
         }
       } catch (error) {
+        const failure = classifyFailure({ error });
         if (pathname.startsWith("/stream/")) {
+          setReliabilityOutcome({ source: failure.source, cause: failure.cause, result: "degraded" });
           sendDegradedStream(req, res, error);
           return;
         }
+        setReliabilityOutcome({ source: failure.source, cause: failure.cause, result: "failure" });
         sendPublicError(req, res, 503);
         return;
       }
@@ -992,7 +1078,19 @@ module.exports = async function (req, res) {
         res.statusCode = 404;
         res.end();
       });
+      setReliabilityOutcome({
+        source: "policy",
+        cause: "service_unavailable",
+        result: normalizeReliabilityResult(res.statusCode, "success")
+      });
     } finally {
+      const fallbackResult = normalizeReliabilityResult(res.statusCode, "success");
+      await recordReliabilityOutcome(routeType, {
+        source: reliabilityOutcome && reliabilityOutcome.source,
+        cause: reliabilityOutcome && reliabilityOutcome.cause,
+        result: (reliabilityOutcome && reliabilityOutcome.result) || fallbackResult
+      });
+
       emitTelemetry(EVENTS.REQUEST_COMPLETE, {
         source: "policy",
         cause: "completed",
