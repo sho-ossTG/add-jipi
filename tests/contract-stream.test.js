@@ -48,6 +48,31 @@ function mockRedisFetch(mode = "allow") {
   };
 }
 
+function withFixedJerusalemTime(run) {
+  const originalDateTimeFormat = Intl.DateTimeFormat;
+
+  Intl.DateTimeFormat = function MockDateTimeFormat() {
+    return {
+      formatToParts() {
+        return [
+          { type: "year", value: "2099" },
+          { type: "month", value: "01" },
+          { type: "day", value: "01" },
+          { type: "hour", value: "12" },
+          { type: "minute", value: "00" },
+          { type: "second", value: "00" }
+        ];
+      }
+    };
+  };
+
+  return Promise.resolve()
+    .then(run)
+    .finally(() => {
+      Intl.DateTimeFormat = originalDateTimeFormat;
+    });
+}
+
 async function request(pathname, options = {}) {
   const { mode = "allow", resolveEpisode } = options;
 
@@ -73,7 +98,9 @@ async function request(pathname, options = {}) {
   const res = createResponse();
 
   try {
-    await handler(req, res);
+    await withFixedJerusalemTime(async () => {
+      await handler(req, res);
+    });
     return {
       statusCode: res.statusCode,
       headers: res.headers,
