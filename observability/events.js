@@ -93,12 +93,12 @@ function buildEvent(eventName, payload = {}) {
   const derived = classifyFailure(payload);
   const cause = payload.cause || derived.cause;
   return {
+    ...payload,
     event: eventName,
     category: payload.category || EVENT_CATEGORY_MAP[eventName] || CATEGORIES.REQUEST,
     source: normalizeSource(payload.source || derived.source, cause),
     cause,
-    correlationId: payload.correlationId || getCorrelationId(),
-    ...payload
+    correlationId: payload.correlationId || getCorrelationId()
   };
 }
 

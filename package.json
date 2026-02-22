@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node serverless.js",
+    "test:contract:observability": "node --test tests/contract-observability.test.js",
     "test:contract:reliability": "node --test tests/contract-stream-reliability.test.js",
     "test:contract:manifest-catalog": "node --test tests/contract-manifest-catalog.test.js",
     "test:contract:stream": "node --test tests/contract-stream.test.js",
@@ -12,6 +13,7 @@
     "test:contract:cors": "node --test tests/contract-cors-policy.test.js"
   },
   "dependencies": {
+    "pino": "^10.3.1",
     "proxy-addr": "^2.0.7",
     "stremio-addon-sdk": "^1.6.10"
   }
