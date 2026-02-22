@@ -2,52 +2,61 @@
 
 ## What This Is
 
-add-jipi is a Stremio addon service that resolves episode requests into playable stream URLs through a broker backend. It is deployed as a Node.js serverless entrypoint and includes operational endpoints for health and quarantine telemetry. The project currently focuses on making the addon reliable, secure, and maintainable for production use.
+add-jipi is a Stremio addon backend that resolves supported episode requests into playable stream URLs with deterministic contract behavior, secure operational boundaries, reliability controls, and operator-safe diagnostics.
 
 ## Core Value
 
 Users can reliably request a supported episode and immediately receive a valid playable stream.
 
+## Current State
+
+- Shipped milestone: v1.0 MVP Hardening (2026-02-22)
+- Delivery status: 6 phases complete, 18 plans complete, 16 of 16 v1 requirements shipped
+- Validation status: milestone audit showed full requirements/phase/integration coverage with only low-severity manual environment checks deferred
+- Integration/network verification status: deferred for protected/authenticated endpoints and live dependency checks; execute documented runbooks on a network-enabled tester machine
+
+## Next Milestone Goals
+
+- Execute deferred live-environment verification runbooks and attach evidence artifacts.
+- Define v1.1 requirements and roadmap scope from operational feedback.
+- Prioritize operational maturity requirements (`OPER-01`, `OPER-02`) versus product expansion (`PROD-01`, `PROD-02`).
+
 ## Requirements
 
 ### Validated
 
-- ✓ Expose Stremio manifest and catalog endpoints for addon clients — existing
-- ✓ Resolve supported stream episode IDs through broker integration — existing
-- ✓ Enforce basic slot/session controls with Redis-backed state — existing
-- ✓ Provide operational health and quarantine endpoints for diagnostics — existing
+- v1.0 requirements archive: `.planning/milestones/v1.0-REQUIREMENTS.md`
 
 ### Active
 
-- [ ] Harden request handling and admin endpoints to meet baseline production security.
-- [ ] Improve stream-path resiliency and observability so failures are diagnosable.
-- [ ] Reduce architecture coupling by separating routing, policy, integrations, and presentation concerns.
+- [ ] Create new milestone requirements document via `/gsd-new-milestone`.
+- [ ] Decide v1.1 focus area (operational maturity, product expansion, or mixed scope).
 
 ### Out of Scope
 
-- Native mobile app clients — this project is a server-side addon backend.
-- Multi-tenant account and billing system — no product requirement for tenant management today.
-- New content domain expansion beyond current supported title pattern — preserve focused scope while stabilizing core path.
+- Native mobile app clients - this project remains a server-side addon backend.
+- Multi-tenant account and billing system - no active requirement for tenant management.
 
 ## Context
 
-The codebase is a compact JavaScript/CommonJS serverless addon built on `stremio-addon-sdk`, with Redis REST integration for control-state and metrics, and broker API integration for stream URL resolution. A codebase map already exists under `.planning/codebase/` and identifies major concerns around monolithic structure, weak observability, limited test coverage, and exposed operational surfaces. This initialization uses that baseline to define execution-ready planning artifacts.
+The current codebase is a modularized JavaScript/CommonJS serverless addon using `stremio-addon-sdk`, Redis REST integrations, and broker API resolution with deterministic policy and contract tests. Milestone v1.0 established stable runtime boundaries and governance, while live-network validation remains intentionally documented as manual runbooks due offline execution constraints on this machine.
 
 ## Constraints
 
-- **Tech stack**: Keep Node.js CommonJS and Stremio addon contract compatibility — avoids unnecessary migration risk during stabilization.
-- **Deployment**: Must run in Vercel-style serverless runtime — current production routing and env model depend on it.
-- **Dependency boundary**: Keep broker API + Redis REST as external dependencies — core behavior requires both integrations.
-- **Reliability**: Preserve valid fallback behavior for stream responses — addon clients must always receive protocol-safe output.
-- **Security**: Avoid exposing sensitive operational data publicly — current admin diagnostics are too open.
+- **Tech stack**: Keep Node.js CommonJS and Stremio addon contract compatibility.
+- **Deployment**: Must run in Vercel-style serverless runtime.
+- **Dependency boundary**: Keep broker API + Redis REST as external dependencies.
+- **Reliability**: Preserve protocol-safe fallback behavior for stream responses.
+- **Security**: Keep operational diagnostics auth-gated and sanitized.
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Initialize as an auto-driven brownfield planning cycle | Existing code and codebase map already define current system behavior | — Pending |
-| Keep architecture evolution incremental instead of rewrite | Minimize disruption to active stream delivery path | — Pending |
-| Prioritize hardening and observability before feature expansion | Stability and diagnosability are required foundations for safe iteration | — Pending |
+| Keep architecture evolution incremental instead of rewrite | Minimize disruption to active stream delivery path | Good |
+| Prioritize hardening and observability before feature expansion | Stability and diagnosability are required before broader scope | Good |
+| Adopt modular routing/policy/integration/presentation boundaries | Reduce coupling and improve maintainer safety | Good |
+| Keep live-network checks as explicit manual runbooks under offline constraints | Preserve operational verification quality without violating local execution limits | Good |
 
 ---
-*Last updated: 2026-02-21 after initialization*
+*Last updated: 2026-02-22 after v1.0 milestone completion*
