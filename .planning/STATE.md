@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 5 of 5 (Modularization and Test Governance)
-Plan: 1 of 6 in current phase
+Plan: 2 of 6 in current phase
 Status: In progress
-Last activity: 2026-02-22 - Completed 05-01-PLAN.md.
+Last activity: 2026-02-22 - Completed 05-02-PLAN.md.
 
-Progress: ███████░░░ 67%
+Progress: ███████░░░ 73%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
+- Total plans completed: 11
 - Average duration: 2 min
-- Total execution time: 0.2 hours
+- Total execution time: 0.4 hours
 
 **By Phase:**
 
@@ -31,10 +31,10 @@ Progress: ███████░░░ 67%
 | 2. Security Boundary Hardening | 2 | 4 min | 2 min |
 | 3. Stream Reliability Controls | 2 | 3 min | 2 min |
 | 4. Observability and Diagnostics | 3 | 11 min | 4 min |
-| 5. Modularization and Test Governance | 1 | 2 min | 2 min |
+| 5. Modularization and Test Governance | 2 | 4 min | 2 min |
 
 **Recent Trend:**
-- Last 5 plans: Phase 03 Plan 02 (1 min), Phase 04 Plan 01 (6 min), Phase 04 Plan 02 (3 min), Phase 04 Plan 03 (2 min), Phase 05 Plan 01 (2 min)
+- Last 5 plans: Phase 04 Plan 01 (6 min), Phase 04 Plan 02 (3 min), Phase 04 Plan 03 (2 min), Phase 05 Plan 01 (2 min), Phase 05 Plan 02 (2 min)
 - Trend: Stable
 
 ## Accumulated Context
@@ -73,6 +73,8 @@ Recent decisions affecting current work:
 - [Phase 04]: Contract suites must assert `/health/details` projector-shaped success/degraded payloads and reject unsanitized diagnostic leakage.
 - [Phase 05]: Preserve two-step migration by scaffolding policy/integration modules before runtime rewiring.
 - [Phase 05]: Boundary and import-direction rules are documented now as guardrails; static enforcement remains deferred.
+- [Phase 05]: Route and presentation module roots are scaffolded with injected dependencies before entrypoint rewiring.
+- [Phase 05]: `modules/index.js` is the canonical export map for scaffold discoverability across policy/integration/routing/presentation.
 
 ### Pending Todos
 
@@ -84,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 13:12
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-02-22 13:17
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None
