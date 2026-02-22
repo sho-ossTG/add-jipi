@@ -12,16 +12,16 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 Phase: 6 of 6 (Milestone Audit Cleanup)
 Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-22 - Completed 06-02-PLAN.md (manual outage verification runbook).
+Last activity: 2026-02-22 - Completed 06-01-PLAN.md (Stremio manual verification runbook).
 
-Progress: █████████░ 89%
+Progress: █████████░ 94%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16
+- Total plans completed: 17
 - Average duration: 4 min
-- Total execution time: 0.8 hours
+- Total execution time: 0.9 hours
 
 **By Phase:**
 
@@ -32,10 +32,10 @@ Progress: █████████░ 89%
 | 3. Stream Reliability Controls | 2 | 3 min | 2 min |
 | 4. Observability and Diagnostics | 3 | 11 min | 4 min |
 | 5. Modularization and Test Governance | 6 | 25 min | 4 min |
-| 6. Milestone Audit Cleanup | 1 | 6 min | 6 min |
+| 6. Milestone Audit Cleanup | 2 | 12 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: Phase 05 Plan 03 (4 min), Phase 05 Plan 04 (6 min), Phase 05 Plan 05 (5 min), Phase 05 Plan 06 (6 min), Phase 06 Plan 02 (6 min)
+- Last 5 plans: Phase 05 Plan 04 (6 min), Phase 05 Plan 05 (5 min), Phase 05 Plan 06 (6 min), Phase 06 Plan 02 (6 min), Phase 06 Plan 01 (6 min)
 - Trend: Stable
 
 ## Accumulated Context
@@ -87,10 +87,11 @@ Recent decisions affecting current work:
 - [Phase 05]: `test:gate:required` is the deployment-blocking command; broader diagnostics remain optional via separate gate scripts.
 - [Phase 06]: Outage verification is captured in a single scenario matrix with explicit actions, expected behavior, and pass criteria per failure mode.
 - [Phase 06]: Network-dependent outage checks remain manual-only and must be executed on a network-enabled tester machine.
+- [Phase 06]: Stremio install/browse/playback verification now has a command-first runbook with explicit expected outcomes and evidence logging fields.
 
 ### Pending Todos
 
-- Offline verification note: online/network-dependent verification steps remain DEFERRED by execution constraint; this plan required no network checks.
+- Offline verification note: network-dependent manual verification remains DEFERRED on this machine; execute phase 6 runbooks on a network-enabled tester machine and attach evidence.
 
 ### Blockers/Concerns
 
@@ -98,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 16:36
-Stopped at: Completed 06-02-PLAN.md
+Last session: 2026-02-22 16:37
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None
