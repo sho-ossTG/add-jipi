@@ -2,6 +2,9 @@ const { addonBuilder } = require("stremio-addon-sdk");
 
 const B_BASE_URL = process.env.B_BASE_URL || "";
 const IMDB_ID = "tt0388629";
+const DEPENDENCY_ATTEMPT_TIMEOUT_MS = 900;
+const DEPENDENCY_TOTAL_TIMEOUT_MS = 1800;
+const DEPENDENCY_RETRY_JITTER_MS = 120;
 
 const manifest = {
   id: "org.jipi.onepiece",
@@ -15,6 +18,67 @@ const manifest = {
 };
 
 const builder = new addonBuilder(manifest);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomJitter(maxMs) {
+  return Math.floor(Math.random() * Math.max(1, maxMs));
+}
+
+function isTransientDependencyFailure(error) {
+  if (!error) return false;
+  const status = Number(error.statusCode || 0);
+  if (status === 408 || status === 429 || status >= 500) return true;
+  const code = String(error.code || "").toLowerCase();
+  return code === "aborterror" || code === "etimedout" || code === "ecanceled" || code === "econnreset";
+}
+
+async function executeBoundedDependency(operation, options = {}) {
+  const {
+    attemptTimeoutMs = DEPENDENCY_ATTEMPT_TIMEOUT_MS,
+    totalBudgetMs = DEPENDENCY_TOTAL_TIMEOUT_MS,
+    jitterMs = DEPENDENCY_RETRY_JITTER_MS
+  } = options;
+
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError;
+
+  while (attempt < 2) {
+    const elapsed = Date.now() - startedAt;
+    const remaining = totalBudgetMs - elapsed;
+    if (remaining <= 0) {
+      const timeoutError = new Error("Dependency operation timed out");
+      timeoutError.code = "dependency_timeout";
+      throw timeoutError;
+    }
+
+    const timeout = Math.max(1, Math.min(attemptTimeoutMs, remaining));
+
+    try {
+      return await operation({ timeout });
+    } catch (error) {
+      lastError = error;
+      const canRetry = attempt === 0 && isTransientDependencyFailure(error);
+      if (!canRetry) break;
+
+      const postAttemptElapsed = Date.now() - startedAt;
+      const postAttemptRemaining = totalBudgetMs - postAttemptElapsed;
+      if (postAttemptRemaining <= 1) break;
+
+      const jitterDelay = Math.min(randomJitter(jitterMs), postAttemptRemaining - 1);
+      if (jitterDelay > 0) {
+        await sleep(jitterDelay);
+      }
+    }
+
+    attempt += 1;
+  }
+
+  throw lastError;
+}
 
 builder.defineCatalogHandler(async (args) => {
   if (args.type !== "series" || args.id !== "onepiece_catalog") {
@@ -47,18 +111,27 @@ async function callBrokerResolve(episodeId) {
   const u = new URL("/api/resolve", B_BASE_URL);
   u.searchParams.set("episode", episodeId);
 
-  const r = await fetch(u.toString(), { method: "GET" });
+  const r = await executeBoundedDependency(async ({ timeout }) => {
+    const response = await fetch(u.toString(), {
+      method: "GET",
+      signal: AbortSignal.timeout(timeout)
+    });
+
+    if (!response.ok) {
+      const err = new Error(`Broker request failed with status ${response.status}`);
+      err.code = "broker_http_error";
+      err.statusCode = response.status;
+      throw err;
+    }
+
+    return response;
+  });
 
   let data;
   try {
     data = await r.json();
   } catch {
     throw new Error("Broker returned non-JSON response");
-  }
-
-  if (!r.ok) {
-    const msg = data && data.error ? data.error : "Broker error";
-    throw new Error(msg);
   }
 
   if (!data.url || typeof data.url !== "string") {
