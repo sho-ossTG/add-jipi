@@ -2,6 +2,17 @@ const { getRouter } = require("stremio-addon-sdk");
 const crypto = require("node:crypto");
 const proxyaddr = require("proxy-addr");
 const addonInterface = require("./addon");
+const {
+  withRequestContext,
+  bindResponseCorrelationId,
+  getCorrelationId
+} = require("./observability/context");
+const { getLogger } = require("./observability/logger");
+const {
+  EVENTS,
+  emitEvent,
+  classifyFailure
+} = require("./observability/events");
 
 const router = getRouter(addonInterface);
 
@@ -48,6 +59,10 @@ const DEGRADED_STREAM_POLICY = Object.freeze({
     message: "Stream source is temporarily unavailable. Please retry shortly."
   }
 });
+
+function emitTelemetry(eventName, payload = {}) {
+  return emitEvent(getLogger({ component: "serverless" }), eventName, payload);
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -121,29 +136,51 @@ async function redisCommand(command) {
   if (!url || !token) {
     const err = new Error("Missing Redis configuration");
     err.code = "redis_config_missing";
+    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
+      ...classifyFailure({ error: err, source: "redis" }),
+      dependency: "redis",
+      operation: String(command && command[0] ? command[0] : "unknown")
+    });
     throw err;
   }
 
-  const response = await executeBoundedDependency(async ({ timeout }) => {
-    const nextResponse = await fetch(`${url}/pipeline`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify([command]),
-      signal: AbortSignal.timeout(timeout)
-    });
-
-    if (!nextResponse.ok) {
-      const err = new Error(`Redis request failed with status ${nextResponse.status}`);
-      err.code = "redis_http_error";
-      err.statusCode = nextResponse.status;
-      throw err;
-    }
-
-    return nextResponse;
+  emitTelemetry(EVENTS.DEPENDENCY_ATTEMPT, {
+    source: "redis",
+    cause: "redis_command",
+    dependency: "redis",
+    operation: String(command && command[0] ? command[0] : "unknown")
   });
+
+  let response;
+  try {
+    response = await executeBoundedDependency(async ({ timeout }) => {
+      const nextResponse = await fetch(`${url}/pipeline`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify([command]),
+        signal: AbortSignal.timeout(timeout)
+      });
+
+      if (!nextResponse.ok) {
+        const err = new Error(`Redis request failed with status ${nextResponse.status}`);
+        err.code = "redis_http_error";
+        err.statusCode = nextResponse.status;
+        throw err;
+      }
+
+      return nextResponse;
+    });
+  } catch (error) {
+    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
+      ...classifyFailure({ error, source: "redis" }),
+      dependency: "redis",
+      operation: String(command && command[0] ? command[0] : "unknown")
+    });
+    throw error;
+  }
 
   const data = await response.json();
   const item = Array.isArray(data) ? data[0] : null;
@@ -151,6 +188,11 @@ async function redisCommand(command) {
   if (!item || item.error) {
     const err = new Error(item && item.error ? item.error : "Invalid Redis response");
     err.code = "redis_response_error";
+    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
+      ...classifyFailure({ error: err, source: "redis" }),
+      dependency: "redis",
+      operation: String(command && command[0] ? command[0] : "unknown")
+    });
     throw err;
   }
 
@@ -357,6 +399,7 @@ function sendPublicError(req, res, statusCode = 503) {
 
 function sendJson(req, res, statusCode, payload) {
   applyCors(req, res);
+  bindResponseCorrelationId(res);
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(payload));
@@ -379,33 +422,14 @@ function sendErrorStream(req, res, title) {
   });
 }
 
-function normalizeCauseFromReason(reason) {
-  const value = String(reason || "").toLowerCase();
-  if (value === "blocked:shutdown_window") return "policy_shutdown";
-  if (value.startsWith("blocked:")) return "capacity_busy";
-  return "dependency_unavailable";
-}
-
 function classifyReliabilityCause(errorOrReason) {
-  if (typeof errorOrReason === "string") {
-    return normalizeCauseFromReason(errorOrReason);
-  }
+  const classification = typeof errorOrReason === "string"
+    ? classifyFailure({ reason: errorOrReason })
+    : classifyFailure({ error: errorOrReason });
 
-  const code = String(errorOrReason && errorOrReason.code ? errorOrReason.code : "").toLowerCase();
-  if (code === "dependency_timeout" || code === "aborterror" || code === "etimedout" || code === "ecanceled") {
-    return "dependency_timeout";
-  }
-
-  if (
-    code.startsWith("redis_") ||
-    code.startsWith("broker_") ||
-    code === "dependency_unavailable" ||
-    code === "econnreset" ||
-    code === "enotfound"
-  ) {
-    return "dependency_unavailable";
-  }
-
+  if (classification.cause === "policy_shutdown") return "policy_shutdown";
+  if (classification.cause === "capacity_busy") return "capacity_busy";
+  if (classification.cause === "dependency_timeout") return "dependency_timeout";
   return "dependency_unavailable";
 }
 
@@ -426,6 +450,14 @@ function buildDegradedStreamPayload(causeInput) {
 }
 
 function sendDegradedStream(req, res, causeInput) {
+  const classification = typeof causeInput === "string"
+    ? classifyFailure({ reason: causeInput })
+    : classifyFailure({ error: causeInput });
+  emitTelemetry(EVENTS.REQUEST_DEGRADED, {
+    ...classification,
+    route: req.url || "",
+    method: req.method || "GET"
+  });
   sendJson(req, res, 200, buildDegradedStreamPayload(causeInput));
 }
 
@@ -531,7 +563,24 @@ async function resolveStreamIntent(ip, episodeId) {
     }
   }
 
-  const resolved = await addonInterface.resolveEpisode(episodeId);
+  emitTelemetry(EVENTS.DEPENDENCY_ATTEMPT, {
+    source: "broker",
+    cause: "resolve_episode",
+    dependency: "broker",
+    episodeId
+  });
+
+  let resolved;
+  try {
+    resolved = await addonInterface.resolveEpisode(episodeId);
+  } catch (error) {
+    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
+      ...classifyFailure({ error, source: "broker" }),
+      dependency: "broker",
+      episodeId
+    });
+    throw error;
+  }
   let finalUrl = resolved.url || "";
 
   if (finalUrl.startsWith("http://")) {
@@ -539,9 +588,15 @@ async function resolveStreamIntent(ip, episodeId) {
   }
 
   if (!finalUrl.startsWith("https://")) {
+    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
+      source: "validation",
+      cause: "validation_invalid_stream_url",
+      dependency: "broker",
+      episodeId
+    });
     return {
       status: "degraded",
-      cause: "dependency_unavailable"
+      cause: "validation_invalid_stream_url"
     };
   }
 
@@ -690,6 +745,11 @@ async function applyRequestControls(req, pathname) {
 
   // 1. Blocked Hours (00:00-08:00 Israel)
   if (jInfo.hour >= 0 && jInfo.hour < 8) {
+    emitTelemetry(EVENTS.POLICY_DECISION, {
+      ...classifyFailure({ reason: "blocked:shutdown_window" }),
+      route: pathname,
+      allowed: false
+    });
     return { allowed: false, reason: "blocked:shutdown_window" };
   }
 
@@ -709,12 +769,23 @@ async function applyRequestControls(req, pathname) {
   const gateDecision = await runAtomicSessionGate(ip, now);
   if (!gateDecision.allowed) {
     await redisCommand(["INCR", "stats:slot_taken"]);
+    emitTelemetry(EVENTS.POLICY_DECISION, {
+      ...classifyFailure({ reason: gateDecision.reason || "blocked:slot_taken" }),
+      route: pathname,
+      allowed: false
+    });
     return {
       allowed: false,
       reason: gateDecision.reason || "blocked:slot_taken"
     };
   }
 
+  emitTelemetry(EVENTS.POLICY_DECISION, {
+    source: "policy",
+    cause: "admitted",
+    route: pathname,
+    allowed: true
+  });
   return { allowed: true, ip };
 }
 
@@ -824,82 +895,114 @@ async function handleQuarantine(req, res) {
 }
 
 module.exports = async function (req, res) {
-  const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-  const pathname = reqUrl.pathname;
-  const routeType = classifyRoute(pathname);
+  return withRequestContext(req, async () => {
+    bindResponseCorrelationId(res);
+    const startedAt = Date.now();
+    const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const pathname = reqUrl.pathname;
+    const routeType = classifyRoute(pathname);
 
-  if (handlePreflight(req, res)) {
-    return;
-  }
+    emitTelemetry(EVENTS.REQUEST_START, {
+      source: "policy",
+      cause: "received",
+      route: pathname,
+      method: req.method || "GET",
+      routeType
+    });
 
-  if (routeType === "operator") {
-    const authz = authorizeOperator(req);
-    if (!authz.allowed) {
-      sendJson(req, res, authz.statusCode, { error: authz.error });
-      return;
-    }
-  }
-
-  if (pathname === "/") {
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/html");
-    applyCors(req, res);
-    res.end(getLandingPageHtml());
-    return;
-  }
-
-  if (pathname === "/health") {
-    sendJson(req, res, 200, { status: "OK" });
-    return;
-  }
-
-  if (pathname === "/health/details") {
     try {
-      await redisCommand(["PING"]);
-      sendJson(req, res, 200, { status: "OK", redis: "connected" });
-    } catch {
-      sendJson(req, res, 503, { status: "FAIL", error: "dependency_unavailable" });
-    }
-    return;
-  }
-
-  if (pathname === "/quarantine") {
-    try {
-      await handleQuarantine(req, res);
-    } catch {
-      sendJson(req, res, 500, { error: "internal_error" });
-    }
-    return;
-  }
-
-  try {
-    const controlResult = await applyRequestControls(req, pathname);
-    
-    if (!controlResult.allowed) {
-      if (pathname.startsWith("/stream/")) {
-        sendDegradedStream(req, res, controlResult.reason);
+      if (handlePreflight(req, res)) {
         return;
       }
-      sendPublicError(req, res, 503);
-      return;
-    }
 
-    if (pathname.startsWith("/stream/")) {
-      const handled = await handleStreamRequest(req, res, pathname, controlResult.ip || getTrustedClientIp(req));
-      if (handled) return;
-    }
-  } catch (error) {
-    if (pathname.startsWith("/stream/")) {
-      sendDegradedStream(req, res, error);
-      return;
-    }
-    sendPublicError(req, res, 503);
-    return;
-  }
+      if (routeType === "operator") {
+        const authz = authorizeOperator(req);
+        emitTelemetry(EVENTS.POLICY_DECISION, {
+          ...classifyFailure({ code: authz.error || "operator_allowed", source: "policy" }),
+          route: pathname,
+          allowed: Boolean(authz.allowed)
+        });
+        if (!authz.allowed) {
+          sendJson(req, res, authz.statusCode, { error: authz.error });
+          return;
+        }
+      }
 
-  applyCors(req, res);
-  router(req, res, () => {
-    res.statusCode = 404;
-    res.end();
+      if (pathname === "/") {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html");
+        applyCors(req, res);
+        bindResponseCorrelationId(res);
+        res.end(getLandingPageHtml());
+        return;
+      }
+
+      if (pathname === "/health") {
+        sendJson(req, res, 200, { status: "OK" });
+        return;
+      }
+
+      if (pathname === "/health/details") {
+        try {
+          await redisCommand(["PING"]);
+          sendJson(req, res, 200, { status: "OK", redis: "connected" });
+        } catch {
+          sendJson(req, res, 503, { status: "FAIL", error: "dependency_unavailable" });
+        }
+        return;
+      }
+
+      if (pathname === "/quarantine") {
+        try {
+          await handleQuarantine(req, res);
+        } catch {
+          sendJson(req, res, 500, { error: "internal_error" });
+        }
+        return;
+      }
+
+      try {
+        const controlResult = await applyRequestControls(req, pathname);
+
+        if (!controlResult.allowed) {
+          if (pathname.startsWith("/stream/")) {
+            sendDegradedStream(req, res, controlResult.reason);
+            return;
+          }
+          sendPublicError(req, res, 503);
+          return;
+        }
+
+        if (pathname.startsWith("/stream/")) {
+          const handled = await handleStreamRequest(req, res, pathname, controlResult.ip || getTrustedClientIp(req));
+          if (handled) return;
+        }
+      } catch (error) {
+        if (pathname.startsWith("/stream/")) {
+          sendDegradedStream(req, res, error);
+          return;
+        }
+        sendPublicError(req, res, 503);
+        return;
+      }
+
+      applyCors(req, res);
+      bindResponseCorrelationId(res);
+      router(req, res, () => {
+        res.statusCode = 404;
+        res.end();
+      });
+    } finally {
+      emitTelemetry(EVENTS.REQUEST_COMPLETE, {
+        source: "policy",
+        cause: "completed",
+        route: pathname,
+        method: req.method || "GET",
+        routeType,
+        statusCode: Number(res.statusCode || 0),
+        durationMs: Date.now() - startedAt,
+        correlationId: getCorrelationId()
+      });
+    }
   });
 };
