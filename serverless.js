@@ -192,7 +192,12 @@ function applyCors(req, res) {
   }
 
   res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
+  const vary = String(res.getHeader ? res.getHeader("Vary") || "" : "");
+  const varyEntries = parseCsv(vary).map((item) => item.toLowerCase());
+  if (!varyEntries.includes("origin")) {
+    const nextVary = vary ? `${vary}, Origin` : "Origin";
+    res.setHeader("Vary", nextVary);
+  }
   return { hasOrigin: true, originAllowed: true, policy };
 }
 
@@ -203,6 +208,13 @@ function handlePreflight(req, res) {
   if (!cors.originAllowed) {
     res.statusCode = 204;
     res.end();
+    return true;
+  }
+
+  const requestedMethod = String(req.headers["access-control-request-method"] || "").trim().toUpperCase();
+  if (requestedMethod && !cors.policy.methods.includes(requestedMethod)) {
+    res.statusCode = 403;
+    sendJson(req, res, 403, { error: "cors_method_not_allowed" });
     return true;
   }
 
