@@ -7,7 +7,7 @@ const manifest = {
   id: "org.jipi.onepiece",
   version: "1.0.0",
   name: "One Piece (Jipi)",
-  description: "Streams resolved via Broker (B) and Worker (C)",
+  description: "JIPI NAKAMA ANIMEISREAL ",
   resources: ["catalog", "stream"],
   types: ["series"],
   catalogs: [{ type: "series", id: "onepiece_catalog", name: "One Piece" }],
