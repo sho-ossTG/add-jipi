@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Contract Compatibility Baseline** - Preserve manifest, catalog, and stream contract behavior for supported episodes.
 - [x] **Phase 2: Security Boundary Hardening** - Restrict operational surfaces and enforce trusted request identity.
 - [x] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load. (completed 2026-02-22)
-- [ ] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals.
+- [x] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals. (completed 2026-02-22)
 - [ ] **Phase 5: Modularization and Test Governance** - Split core concerns into maintainable modules with reliable automated validation.
 
 ## Phase Details
@@ -75,7 +75,7 @@ Plans:
 
 Plans:
 - [x] 04-01-PLAN.md — Add request-scoped correlation telemetry and canonical failure taxonomy with observability contracts.
-- [ ] 04-02-PLAN.md — Expose operator-safe health/metrics diagnostics with redaction and auth-boundary contracts.
+- [x] 04-02-PLAN.md — Expose operator-safe health/metrics diagnostics with redaction and auth-boundary contracts.
 
 ### Phase 5: Modularization and Test Governance
 **Goal**: Maintainers can change core backend concerns safely with modular boundaries and deterministic test coverage.
@@ -97,5 +97,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Contract Compatibility Baseline | 2/2 | Complete    | 2026-02-21 |
 | 2. Security Boundary Hardening | 2/2 | Complete    | 2026-02-22 |
 | 3. Stream Reliability Controls | 2/2 | Complete    | 2026-02-22 |
-| 4. Observability and Diagnostics | 1/2 | In progress | - |
-| 5. Modularization and Test Governance | 0/2 | Not started | - |
+| 4. Observability and Diagnostics | 2/2 | Complete    | 2026-02-22 |
+| 5. Modularization and Test Governance | 0/2 | In progress | - |
