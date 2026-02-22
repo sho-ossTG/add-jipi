@@ -86,7 +86,15 @@ Plans:
   1. Maintainer can update routing, policy, integrations, and presentation code in separate modules with clear boundaries.
   2. Maintainer can run automated tests that validate stream contract behavior and failure branches before deployment.
   3. Maintainer can run deterministic tests that reproduce time-window and session-gating policy behavior.
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+- [x] 05-01-PLAN.md — Scaffold boundary policy/integration modules and document import-direction rules.
+- [ ] 05-02-PLAN.md — Scaffold routing/presentation module roots and publish module export map.
+- [ ] 05-03-PLAN.md — Rewire request-controls through modular policy/integration boundaries.
+- [ ] 05-04-PLAN.md — Rewire stream orchestration/presentation with thin entrypoint composition.
+- [ ] 05-05-PLAN.md — Modularize operator/public routing and presentation and finalize boundary examples.
+- [ ] 05-06-PLAN.md — Add deterministic policy tests and required pre-deploy contract/failure test gates.
 
 ## Progress
 
@@ -99,4 +107,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Security Boundary Hardening | 2/2 | Complete    | 2026-02-22 |
 | 3. Stream Reliability Controls | 2/2 | Complete    | 2026-02-22 |
 | 4. Observability and Diagnostics | 3/3 | Complete    | 2026-02-22 |
-| 5. Modularization and Test Governance | 0/2 | In progress | - |
+| 5. Modularization and Test Governance | 1/6 | In progress | - |
