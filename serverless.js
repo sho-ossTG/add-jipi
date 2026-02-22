@@ -18,6 +18,7 @@ const {
   readReliabilitySummary
 } = require("./observability/metrics");
 const {
+  projectOperatorHealth,
   projectOperatorMetrics
 } = require("./observability/diagnostics");
 
@@ -1022,11 +1023,18 @@ module.exports = async function (req, res) {
       if (pathname === "/health/details") {
         try {
           await redisCommand(["PING"]);
+          const reliability = await readReliabilitySummary(redisCommand);
           setReliabilityOutcome({ source: "redis", cause: "success", result: "success" });
-          sendJson(req, res, 200, { status: "OK", redis: "connected" });
+          sendJson(req, res, 200, projectOperatorHealth({
+            redisStatus: "connected",
+            reliability
+          }));
         } catch {
           setReliabilityOutcome({ source: "redis", cause: "dependency_unavailable", result: "failure" });
-          sendJson(req, res, 503, { status: "FAIL", error: "dependency_unavailable" });
+          sendJson(req, res, 503, projectOperatorHealth({
+            redisStatus: "unavailable",
+            reliability: {}
+          }));
         }
         return;
       }
