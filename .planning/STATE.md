@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 4 of 5 (Observability and Diagnostics)
-Plan: 2 of 2 in current phase
+Plan: 3 of 3 in current phase
 Status: Phase complete
-Last activity: 2026-02-22 - Completed 04-02-PLAN.md.
+Last activity: 2026-02-22 - Completed 04-03-PLAN.md.
 
-Progress: [########--] 80%
+Progress: [########--] 82%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: 2 min
 - Total execution time: 0.2 hours
 
@@ -30,11 +30,11 @@ Progress: [########--] 80%
 | 1. Contract Compatibility Baseline | 2 | 3 min | 2 min |
 | 2. Security Boundary Hardening | 2 | 4 min | 2 min |
 | 3. Stream Reliability Controls | 2 | 3 min | 2 min |
-| 4. Observability and Diagnostics | 2 | 9 min | 5 min |
+| 4. Observability and Diagnostics | 3 | 11 min | 4 min |
 | 5. Modularization and Test Governance | 0 | 0 min | 0 min |
 
 **Recent Trend:**
-- Last 5 plans: Phase 02 Plan 02 (2 min), Phase 03 Plan 01 (2 min), Phase 03 Plan 02 (1 min), Phase 04 Plan 01 (6 min), Phase 04 Plan 02 (3 min)
+- Last 5 plans: Phase 03 Plan 01 (2 min), Phase 03 Plan 02 (1 min), Phase 04 Plan 01 (6 min), Phase 04 Plan 02 (3 min), Phase 04 Plan 03 (2 min)
 - Trend: Stable
 
 ## Accumulated Context
@@ -69,6 +69,8 @@ Recent decisions affecting current work:
 - [Phase 04]: Normalize unknown/free-form source labels to canonical broker/redis/validation/policy sources before logging.
 - [Phase 04]: Persist reliability counters in Redis using bounded source/cause/routeClass/result dimensions only.
 - [Phase 04]: Expose aggregated telemetry via token-gated `/operator/metrics` responses with allowlisted diagnostics projections.
+- [Phase 04]: `/health/details` and `/operator/metrics` must both project diagnostics through shared helpers in `observability/diagnostics.js`.
+- [Phase 04]: Contract suites must assert `/health/details` projector-shaped success/degraded payloads and reject unsanitized diagnostic leakage.
 
 ### Pending Todos
 
@@ -80,6 +82,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22 12:36
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-02-22 11:00
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None

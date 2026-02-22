@@ -71,11 +71,12 @@ Plans:
   1. Operators can follow a failing request path end-to-end with a correlation ID across request, policy, and dependency events.
   2. Operational telemetry clearly classifies failures by source (broker, Redis, validation, policy).
   3. Operators can query health and key reliability metrics without seeing sensitive internals.
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
 - [x] 04-01-PLAN.md — Add request-scoped correlation telemetry and canonical failure taxonomy with observability contracts.
 - [x] 04-02-PLAN.md — Expose operator-safe health/metrics diagnostics with redaction and auth-boundary contracts.
+- [x] 04-03-PLAN.md — Close diagnostics projection wiring gap for `/health/details` and lock projector-aligned health contract tests.
 
 ### Phase 5: Modularization and Test Governance
 **Goal**: Maintainers can change core backend concerns safely with modular boundaries and deterministic test coverage.
@@ -97,5 +98,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Contract Compatibility Baseline | 2/2 | Complete    | 2026-02-21 |
 | 2. Security Boundary Hardening | 2/2 | Complete    | 2026-02-22 |
 | 3. Stream Reliability Controls | 2/2 | Complete    | 2026-02-22 |
-| 4. Observability and Diagnostics | 2/2 | Complete    | 2026-02-22 |
+| 4. Observability and Diagnostics | 3/3 | Complete    | 2026-02-22 |
 | 5. Modularization and Test Governance | 0/2 | In progress | - |
