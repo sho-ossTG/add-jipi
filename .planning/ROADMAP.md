@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Contract Compatibility Baseline** - Preserve manifest, catalog, and stream contract behavior for supported episodes.
 - [x] **Phase 2: Security Boundary Hardening** - Restrict operational surfaces and enforce trusted request identity.
-- [ ] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load.
+- [x] **Phase 3: Stream Reliability Controls** - Make stream-path dependency and policy behavior deterministic under failure and load. (completed 2026-02-22)
 - [ ] **Phase 4: Observability and Diagnostics** - Make degraded behavior traceable and measurable without exposing sensitive internals.
 - [ ] **Phase 5: Modularization and Test Governance** - Split core concerns into maintainable modules with reliable automated validation.
 
