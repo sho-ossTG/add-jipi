@@ -1,7 +1,9 @@
 const { getRouter } = require("stremio-addon-sdk");
-const crypto = require("node:crypto");
 const proxyaddr = require("proxy-addr");
 const addonInterface = require("./addon");
+const { authorizeOperator } = require("./modules/policy/operator-auth");
+const { createRedisClient } = require("./modules/integrations/redis-client");
+const { applyRequestControls: applyRoutingRequestControls } = require("./modules/routing/request-controls");
 const {
   withRequestContext,
   bindResponseCorrelationId,
@@ -133,89 +135,34 @@ async function executeBoundedDependency(operation, options = {}) {
   throw lastError;
 }
 
-function getRedisConfig() {
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "";
-  return { url, token };
-}
+const redisClient = createRedisClient({
+  executeBoundedDependency
+});
 
 async function redisCommand(command) {
-  const { url, token } = getRedisConfig();
-  if (!url || !token) {
-    const err = new Error("Missing Redis configuration");
-    err.code = "redis_config_missing";
-    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
-      ...classifyFailure({ error: err, source: "redis" }),
-      dependency: "redis",
-      operation: String(command && command[0] ? command[0] : "unknown")
-    });
-    throw err;
-  }
+  const operation = String(command && command[0] ? command[0] : "unknown");
 
   emitTelemetry(EVENTS.DEPENDENCY_ATTEMPT, {
     source: "redis",
     cause: "redis_command",
     dependency: "redis",
-    operation: String(command && command[0] ? command[0] : "unknown")
+    operation
   });
 
-  let response;
   try {
-    response = await executeBoundedDependency(async ({ timeout }) => {
-      const nextResponse = await fetch(`${url}/pipeline`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify([command]),
-        signal: AbortSignal.timeout(timeout)
-      });
-
-      if (!nextResponse.ok) {
-        const err = new Error(`Redis request failed with status ${nextResponse.status}`);
-        err.code = "redis_http_error";
-        err.statusCode = nextResponse.status;
-        throw err;
-      }
-
-      return nextResponse;
-    });
+    return await redisClient.command(command);
   } catch (error) {
     emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
       ...classifyFailure({ error, source: "redis" }),
       dependency: "redis",
-      operation: String(command && command[0] ? command[0] : "unknown")
+      operation
     });
     throw error;
   }
-
-  const data = await response.json();
-  const item = Array.isArray(data) ? data[0] : null;
-
-  if (!item || item.error) {
-    const err = new Error(item && item.error ? item.error : "Invalid Redis response");
-    err.code = "redis_response_error";
-    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
-      ...classifyFailure({ error: err, source: "redis" }),
-      dependency: "redis",
-      operation: String(command && command[0] ? command[0] : "unknown")
-    });
-    throw err;
-  }
-
-  return item.result;
 }
 
 async function redisEval(script, keys = [], args = []) {
-  const command = [
-    "EVAL",
-    script,
-    String(keys.length),
-    ...keys,
-    ...args.map((value) => String(value))
-  ];
-  return redisCommand(command);
+  return redisClient.eval(script, keys, args);
 }
 
 function parseCsv(value) {
@@ -241,38 +188,6 @@ function getTrustedClientIp(req) {
   }
 }
 
-function getJerusalemInfo() {
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Jerusalem",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour12: false
-  });
-  const parts = formatter.formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
-  return {
-    hour: parseInt(parts.hour),
-    minute: parseInt(parts.minute),
-    second: parseInt(parts.second),
-    day: parseInt(parts.day),
-    month: parseInt(parts.month),
-    year: parseInt(parts.year),
-    dateStr: `${parts.year}-${parts.month}-${parts.day}`
-  };
-}
-
-function getSecondsToJerusalem0100() {
-  const info = getJerusalemInfo();
-  let diffHours = 1 - info.hour;
-  if (diffHours <= 0) diffHours += 24;
-  const secondsSpentInCurrentHour = info.minute * 60 + info.second;
-  return diffHours * 3600 - secondsSpentInCurrentHour;
-}
-
 function isStremioRoute(pathname) {
   return pathname === "/manifest.json" || pathname.startsWith("/catalog/") || pathname.startsWith("/stream/");
 }
@@ -290,45 +205,6 @@ function classifyRoute(pathname) {
     return "stremio";
   }
   return "public";
-}
-
-function secureEquals(left, right) {
-  const a = Buffer.from(String(left || ""));
-  const b = Buffer.from(String(right || ""));
-  if (a.length === 0 || b.length === 0 || a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
-function extractOperatorToken(req) {
-  const authHeader = req.headers.authorization;
-  if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
-    return authHeader.slice(7).trim();
-  }
-
-  const headerToken = req.headers["x-operator-token"];
-  if (typeof headerToken === "string" && headerToken.trim()) {
-    return headerToken.trim();
-  }
-
-  return "";
-}
-
-function authorizeOperator(req) {
-  const expected = process.env.OPERATOR_TOKEN || "";
-  if (!expected) {
-    return { allowed: false, statusCode: 401, error: "operator_auth_unconfigured" };
-  }
-
-  const provided = extractOperatorToken(req);
-  if (!provided) {
-    return { allowed: false, statusCode: 401, error: "operator_token_required" };
-  }
-
-  if (!secureEquals(provided, expected)) {
-    return { allowed: false, statusCode: 403, error: "operator_forbidden" };
-  }
-
-  return { allowed: true };
 }
 
 function getCorsPolicy() {
@@ -498,87 +374,6 @@ function sendDegradedStream(req, res, causeInput) {
     method: req.method || "GET"
   });
   sendJson(req, res, 200, buildDegradedStreamPayload(causeInput));
-}
-
-async function runAtomicSessionGate(ip, now) {
-  const gateScript = `
-    local sessions = KEYS[1]
-    local currentIp = ARGV[1]
-    local nowMs = tonumber(ARGV[2])
-    local pruneCutoff = tonumber(ARGV[3])
-    local maxSessions = tonumber(ARGV[4])
-    local slotTtlSec = tonumber(ARGV[5])
-    local reconnectGraceMs = tonumber(ARGV[6])
-    local idleCutoff = tonumber(ARGV[7])
-
-    redis.call("ZREMRANGEBYSCORE", sessions, "-inf", tostring(pruneCutoff))
-
-    local existingScore = redis.call("ZSCORE", sessions, currentIp)
-    if existingScore then
-      redis.call("ZADD", sessions, tostring(nowMs), currentIp)
-      redis.call("EXPIRE", sessions, slotTtlSec)
-      return {1, "admitted:existing", "", redis.call("ZCARD", sessions)}
-    end
-
-    local activeCount = tonumber(redis.call("ZCARD", sessions))
-    if activeCount < maxSessions then
-      redis.call("ZADD", sessions, tostring(nowMs), currentIp)
-      redis.call("EXPIRE", sessions, slotTtlSec)
-      return {1, "admitted:new", "", redis.call("ZCARD", sessions)}
-    end
-
-    local members = redis.call("ZRANGE", sessions, 0, -1, "WITHSCORES")
-    local rotatedIp = nil
-    local rotatedScore = nil
-
-    for i = 1, #members, 2 do
-      local candidateIp = members[i]
-      local candidateScore = tonumber(members[i + 1])
-      if candidateIp ~= currentIp then
-        local idleEnough = candidateScore <= idleCutoff
-        local outsideGrace = (nowMs - candidateScore) >= reconnectGraceMs
-        if idleEnough and outsideGrace then
-          if (not rotatedScore) or (candidateScore < rotatedScore) or (candidateScore == rotatedScore and candidateIp < rotatedIp) then
-            rotatedIp = candidateIp
-            rotatedScore = candidateScore
-          end
-        end
-      end
-    end
-
-    if rotatedIp then
-      redis.call("ZREM", sessions, rotatedIp)
-      redis.call("ZADD", sessions, tostring(nowMs), currentIp)
-      redis.call("EXPIRE", sessions, slotTtlSec)
-      return {1, "admitted:rotated", rotatedIp, redis.call("ZCARD", sessions)}
-    end
-
-    return {0, "blocked:slot_taken", "", activeCount}
-  `;
-
-  const sessionsKey = "system:active_sessions";
-  const gateResult = await redisEval(gateScript, [sessionsKey], [
-    ip,
-    String(now),
-    String(now - (INACTIVITY_LIMIT * 1000)),
-    String(MAX_SESSIONS),
-    String(SLOT_TTL),
-    String(RECONNECT_GRACE_MS),
-    String(now - ROTATION_IDLE_MS)
-  ]);
-
-  if (!Array.isArray(gateResult) || gateResult.length < 2) {
-    const err = new Error("Invalid atomic gate response");
-    err.code = "redis_gate_invalid";
-    throw err;
-  }
-
-  return {
-    allowed: Number(gateResult[0]) === 1,
-    reason: String(gateResult[1] || ""),
-    rotatedIp: gateResult[2] ? String(gateResult[2]) : "",
-    activeCount: Number(gateResult[3] || 0)
-  };
 }
 
 async function resolveStreamIntent(ip, episodeId) {
@@ -778,54 +573,23 @@ function getLandingPageHtml() {
 }
 
 async function applyRequestControls(req, pathname) {
-  if (!isStremioRoute(pathname)) return { allowed: true };
-
-  const jInfo = getJerusalemInfo();
-
-  // 1. Blocked Hours (00:00-08:00 Israel)
-  if (jInfo.hour >= 0 && jInfo.hour < 8) {
-    emitTelemetry(EVENTS.POLICY_DECISION, {
-      ...classifyFailure({ reason: "blocked:shutdown_window" }),
-      route: pathname,
-      allowed: false
-    });
-    return { allowed: false, reason: "blocked:shutdown_window" };
-  }
-
-  // 2. Daily Reset (01:00)
-  const todayResetKey = `system:reset:${jInfo.dateStr}`;
-  if (jInfo.hour >= 1) {
-    const alreadyReset = await redisCommand(["GET", todayResetKey]);
-    if (!alreadyReset) {
-      await redisCommand(["DEL", "quarantine:events"]);
-      await redisCommand(["SET", todayResetKey, "1", "EX", "86400"]);
+  return applyRoutingRequestControls(
+    { req, pathname },
+    {
+      isStremioRoute,
+      getTrustedClientIp,
+      redisCommand,
+      redisEval,
+      emitTelemetry,
+      classifyFailure,
+      events: EVENTS,
+      slotTtlSec: SLOT_TTL,
+      inactivityLimitSec: INACTIVITY_LIMIT,
+      maxSessions: MAX_SESSIONS,
+      reconnectGraceMs: RECONNECT_GRACE_MS,
+      rotationIdleMs: ROTATION_IDLE_MS
     }
-  }
-
-  const ip = getTrustedClientIp(req);
-  const now = Date.now();
-
-  const gateDecision = await runAtomicSessionGate(ip, now);
-  if (!gateDecision.allowed) {
-    await redisCommand(["INCR", "stats:slot_taken"]);
-    emitTelemetry(EVENTS.POLICY_DECISION, {
-      ...classifyFailure({ reason: gateDecision.reason || "blocked:slot_taken" }),
-      route: pathname,
-      allowed: false
-    });
-    return {
-      allowed: false,
-      reason: gateDecision.reason || "blocked:slot_taken"
-    };
-  }
-
-  emitTelemetry(EVENTS.POLICY_DECISION, {
-    source: "policy",
-    cause: "admitted",
-    route: pathname,
-    allowed: true
-  });
-  return { allowed: true, ip };
+  );
 }
 
 async function handleStreamRequest(req, res, pathname, ip) {
@@ -987,7 +751,10 @@ module.exports = async function (req, res) {
       }
 
       if (routeType === "operator") {
-        const authz = authorizeOperator(req);
+        const authz = authorizeOperator({
+          expectedToken: process.env.OPERATOR_TOKEN || "",
+          headers: req.headers || {}
+        });
         emitTelemetry(EVENTS.POLICY_DECISION, {
           ...classifyFailure({ code: authz.error || "operator_allowed", source: "policy" }),
           route: pathname,

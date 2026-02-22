@@ -1,4 +1,36 @@
 const defaultTimeWindow = require("../policy/time-window");
+const { runAtomicSessionGate: defaultRunAtomicSessionGate } = require("../policy/session-gate");
+const { createRedisClient } = require("../integrations/redis-client");
+
+function resolveRedisCommand(injected = {}) {
+  if (typeof injected.redisCommand === "function") {
+    return injected.redisCommand;
+  }
+
+  if (injected.redisClient && typeof injected.redisClient.command === "function") {
+    return injected.redisClient.command.bind(injected.redisClient);
+  }
+
+  const client = createRedisClient(injected.redisOptions || {});
+  return client.command;
+}
+
+function resolveRedisEval(injected = {}, redisCommand) {
+  if (typeof injected.redisEval === "function") {
+    return injected.redisEval;
+  }
+
+  return async function redisEval(script, keys = [], args = []) {
+    const commandParts = [
+      "EVAL",
+      script,
+      String(keys.length),
+      ...keys,
+      ...args.map((value) => String(value))
+    ];
+    return redisCommand(commandParts);
+  };
+}
 
 async function applyRequestControls(input = {}, injected = {}) {
   const req = input.req;
@@ -32,28 +64,58 @@ async function applyRequestControls(input = {}, injected = {}) {
     return { allowed: false, reason: "blocked:shutdown_window" };
   }
 
-  if (typeof injected.redisCommand === "function" && info.hour >= 1 && info.dateStr) {
+  const redisCommand = resolveRedisCommand(injected);
+
+  if (info.hour >= 1 && info.dateStr) {
     const resetKey = `system:reset:${info.dateStr}`;
     const resetTtlSec = String(injected.resetTtlSec || 86400);
     const resetTarget = String(injected.resetTarget || "quarantine:events");
-    const alreadyReset = await injected.redisCommand(["GET", resetKey]);
+    const alreadyReset = await redisCommand(["GET", resetKey]);
     if (!alreadyReset) {
-      await injected.redisCommand(["DEL", resetTarget]);
-      await injected.redisCommand(["SET", resetKey, "1", "EX", resetTtlSec]);
+      await redisCommand(["DEL", resetTarget]);
+      await redisCommand(["SET", resetKey, "1", "EX", resetTtlSec]);
     }
   }
 
   const getTrustedClientIp = injected.getTrustedClientIp;
   const ip = typeof getTrustedClientIp === "function" ? getTrustedClientIp(req) : "unknown";
 
-  if (typeof injected.runSessionGate === "function") {
-    const gateDecision = await injected.runSessionGate(ip, Date.now());
-    if (!gateDecision.allowed) {
-      return {
-        allowed: false,
-        reason: gateDecision.reason || "blocked:slot_taken"
-      };
+  const runSessionGate =
+    typeof injected.runSessionGate === "function"
+      ? injected.runSessionGate
+      : defaultRunAtomicSessionGate;
+  const nowMs =
+    typeof injected.nowMs === "function"
+      ? injected.nowMs()
+      : Date.now();
+
+  const gateDecision = await runSessionGate({
+    redisEval: resolveRedisEval(injected, redisCommand),
+    ip,
+    nowMs,
+    sessionsKey: injected.sessionsKey,
+    inactivityLimitSec: injected.inactivityLimitSec,
+    maxSessions: injected.maxSessions,
+    slotTtlSec: injected.slotTtlSec,
+    reconnectGraceMs: injected.reconnectGraceMs,
+    rotationIdleMs: injected.rotationIdleMs
+  });
+
+  if (!gateDecision.allowed) {
+    await redisCommand(["INCR", String(injected.slotTakenStatKey || "stats:slot_taken")]);
+    if (typeof injected.emitTelemetry === "function") {
+      const classifyFailure = injected.classifyFailure || ((value) => ({ source: "policy", cause: value.reason || "blocked:slot_taken" }));
+      injected.emitTelemetry(injected.events && injected.events.POLICY_DECISION, {
+        ...classifyFailure({ reason: gateDecision.reason || "blocked:slot_taken" }),
+        route: pathname,
+        allowed: false
+      });
     }
+
+    return {
+      allowed: false,
+      reason: gateDecision.reason || "blocked:slot_taken"
+    };
   }
 
   if (typeof injected.emitTelemetry === "function") {
