@@ -20,8 +20,11 @@ function createResponse() {
   };
 }
 
-function withFixedJerusalemTime(run) {
+function withFixedJerusalemTime(run, overrides = {}) {
   const originalDateTimeFormat = Intl.DateTimeFormat;
+  const hour = String(overrides.hour || "12").padStart(2, "0");
+  const minute = String(overrides.minute || "00").padStart(2, "0");
+  const second = String(overrides.second || "00").padStart(2, "0");
 
   Intl.DateTimeFormat = function MockDateTimeFormat() {
     return {
@@ -30,9 +33,9 @@ function withFixedJerusalemTime(run) {
           { type: "year", value: "2099" },
           { type: "month", value: "01" },
           { type: "day", value: "01" },
-          { type: "hour", value: "12" },
-          { type: "minute", value: "00" },
-          { type: "second", value: "00" }
+          { type: "hour", value: hour },
+          { type: "minute", value: minute },
+          { type: "second", value: second }
         ];
       }
     };
@@ -211,7 +214,8 @@ async function request(handler, pathname, options = {}) {
   const {
     method = "GET",
     ip = "198.51.100.20",
-    headers = {}
+    headers = {},
+    jerusalemHour = "12"
   } = options;
 
   const req = {
@@ -227,7 +231,7 @@ async function request(handler, pathname, options = {}) {
 
   await withFixedJerusalemTime(async () => {
     await handler(req, res);
-  });
+  }, { hour: jerusalemHour });
 
   return {
     statusCode: res.statusCode,
@@ -267,8 +271,8 @@ test("atomic gate decisions remain deterministic under concurrent requests", asy
 
     for (const response of responses) {
       assert.equal(response.statusCode, 200);
-      assert.equal(response.body.streams.length, 1);
-      assert.match(response.body.streams[0].title, /capacity is currently full/i);
+      assert.deepEqual(response.body.streams, []);
+      assert.match(response.body.notice, /capacity is currently full/i);
     }
     assert.equal(runtime.state.sessions.size, 2);
   } finally {
@@ -336,7 +340,8 @@ test("reconnect grace preserves existing session continuity while new contenders
 
     assert.equal(existingResponse.statusCode, 200);
     assert.match(existingResponse.body.streams[0].url, /^https:\/\//);
-    assert.match(contenderResponse.body.streams[0].title, /capacity is currently full/i);
+    assert.deepEqual(contenderResponse.body.streams, []);
+    assert.match(contenderResponse.body.notice, /capacity is currently full/i);
     assert.ok(runtime.state.sessions.has("198.51.100.11"));
     assert.ok(runtime.state.sessions.has("198.51.100.12"));
     assert.ok(!runtime.state.sessions.has("198.51.100.13"));
@@ -378,6 +383,150 @@ test("duplicate in-flight requests for same client and episode share one resolve
     assert.equal(first.statusCode, 200);
     assert.equal(second.statusCode, 200);
     assert.equal(resolveCount, 1);
+  } finally {
+    addon.resolveEpisode = originalResolveEpisode;
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../addon")];
+  }
+});
+
+test("capacity and policy causes map to deterministic empty stream responses", async () => {
+  const runtime = createRedisRuntime();
+  const now = Date.now();
+  runtime.state.sessions.set("198.51.100.1", now - 1000);
+  runtime.state.sessions.set("198.51.100.2", now - 2000);
+
+  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token";
+
+  const originalFetch = global.fetch;
+  global.fetch = runtime.fetch;
+  const handler = loadServerless();
+
+  try {
+    const firstCapacity = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", { ip: "198.51.100.31" });
+    const secondCapacity = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", { ip: "198.51.100.32" });
+    const shutdownResponse = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", {
+      ip: "198.51.100.33",
+      jerusalemHour: "02"
+    });
+
+    assert.equal(firstCapacity.statusCode, 200);
+    assert.deepEqual(firstCapacity.body.streams, []);
+    assert.match(firstCapacity.body.notice, /capacity is currently full/i);
+
+    assert.equal(secondCapacity.statusCode, 200);
+    assert.deepEqual(secondCapacity.body.streams, []);
+    assert.equal(secondCapacity.body.notice, firstCapacity.body.notice);
+
+    assert.equal(shutdownResponse.statusCode, 200);
+    assert.deepEqual(shutdownResponse.body.streams, []);
+    assert.match(shutdownResponse.body.notice, /paused between 00:00 and 08:00/i);
+  } finally {
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../serverless")];
+  }
+});
+
+test("dependency timeout and unavailable causes map to deterministic fallback streams", async () => {
+  const runtime = createRedisRuntime();
+
+  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token";
+
+  const originalFetch = global.fetch;
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  global.fetch = runtime.fetch;
+  const handler = loadServerless();
+
+  try {
+    addon.resolveEpisode = async () => {
+      const error = new Error("timeout");
+      error.code = "dependency_timeout";
+      throw error;
+    };
+
+    const timeoutFirst = await request(handler, "/stream/series/tt0388629%3A1%3A7.json", { ip: "198.51.100.41" });
+    const timeoutSecond = await request(handler, "/stream/series/tt0388629%3A1%3A7.json", { ip: "198.51.100.41" });
+
+    assert.equal(timeoutFirst.statusCode, 200);
+    assert.equal(timeoutFirst.body.streams.length, 1);
+    assert.match(timeoutFirst.body.streams[0].title, /temporarily delayed/i);
+    assert.equal(timeoutSecond.body.streams[0].title, timeoutFirst.body.streams[0].title);
+
+    addon.resolveEpisode = async () => {
+      const error = new Error("broker unavailable");
+      error.code = "broker_http_error";
+      error.statusCode = 503;
+      throw error;
+    };
+
+    const unavailableFirst = await request(handler, "/stream/series/tt0388629%3A1%3A8.json", { ip: "198.51.100.41" });
+    const unavailableSecond = await request(handler, "/stream/series/tt0388629%3A1%3A8.json", { ip: "198.51.100.41" });
+
+    assert.equal(unavailableFirst.statusCode, 200);
+    assert.equal(unavailableFirst.body.streams.length, 1);
+    assert.match(unavailableFirst.body.streams[0].title, /temporarily unavailable/i);
+    assert.equal(unavailableSecond.body.streams[0].title, unavailableFirst.body.streams[0].title);
+  } finally {
+    addon.resolveEpisode = originalResolveEpisode;
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../addon")];
+  }
+});
+
+test("latest request wins during rapid same-client episode switching while duplicate requests still coalesce", async () => {
+  const runtime = createRedisRuntime();
+
+  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token";
+
+  const originalFetch = global.fetch;
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  const resolveCounts = new Map();
+  addon.resolveEpisode = async (episodeId) => {
+    resolveCounts.set(episodeId, Number(resolveCounts.get(episodeId) || 0) + 1);
+    if (episodeId.endsWith(":1:10")) {
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      return {
+        url: "https://cdn.example.com/onepiece-1-10.mp4",
+        title: "One Piece S1E10"
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return {
+      url: "https://cdn.example.com/onepiece-1-11.mp4",
+      title: "One Piece S1E11"
+    };
+  };
+
+  global.fetch = runtime.fetch;
+  const handler = loadServerless();
+
+  try {
+    const clientIp = "198.51.100.51";
+    const requestA1 = request(handler, "/stream/series/tt0388629%3A1%3A10.json", { ip: clientIp });
+    const requestA2 = request(handler, "/stream/series/tt0388629%3A1%3A10.json", { ip: clientIp });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const requestB = request(handler, "/stream/series/tt0388629%3A1%3A11.json", { ip: clientIp });
+
+    const [responseA1, responseA2, responseB] = await Promise.all([requestA1, requestA2, requestB]);
+
+    assert.equal(responseA1.statusCode, 200);
+    assert.equal(responseA2.statusCode, 200);
+    assert.equal(responseB.statusCode, 200);
+
+    assert.match(responseA1.body.streams[0].url, /onepiece-1-11\.mp4$/);
+    assert.match(responseA2.body.streams[0].url, /onepiece-1-11\.mp4$/);
+    assert.match(responseB.body.streams[0].url, /onepiece-1-11\.mp4$/);
+
+    assert.equal(resolveCounts.get("tt0388629:1:10"), 1);
+    assert.equal(resolveCounts.get("tt0388629:1:11"), 1);
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
     global.fetch = originalFetch;

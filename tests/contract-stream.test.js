@@ -139,16 +139,15 @@ test("GET supported stream returns contract-valid HTTPS stream payload", async (
   assert.equal(stream.behaviorHints.notWebReady, true);
 });
 
-test("GET stream route blocked by controls returns protocol-safe fallback stream", async () => {
+test("GET stream route blocked by controls returns protocol-safe empty streams", async () => {
   const response = await request("/stream/series/tt0388629%3A1%3A1.json", {
     mode: "slot-blocked"
   });
 
   assert.equal(response.statusCode, 200);
   assert.ok(Array.isArray(response.body.streams));
-  assert.equal(response.body.streams.length, 1);
-  assert.match(response.body.streams[0].title, /^⚠️ /);
-  assert.match(response.body.streams[0].url, /^https:\/\//);
+  assert.deepEqual(response.body.streams, []);
+  assert.match(response.body.notice, /capacity is currently full/i);
 });
 
 test("GET unsupported stream id returns empty streams payload", async () => {
