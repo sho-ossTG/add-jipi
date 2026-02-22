@@ -25,6 +25,29 @@ const DEFAULT_CORS_HEADERS = "Content-Type,Authorization,X-Operator-Token";
 const DEFAULT_CORS_METHODS = "GET,OPTIONS";
 
 const inFlightStreamIntents = new Map();
+const latestStreamSelectionByClient = new Map();
+let latestStreamSelectionVersion = 0;
+
+const LATEST_SELECTION_TTL_MS = 5 * 60 * 1000;
+
+const DEGRADED_STREAM_POLICY = Object.freeze({
+  capacity_busy: {
+    mode: "empty",
+    message: "Stream capacity is currently full. Please retry in a few minutes."
+  },
+  policy_shutdown: {
+    mode: "empty",
+    message: "Streaming is paused between 00:00 and 08:00 Jerusalem time. Please retry after 08:00."
+  },
+  dependency_timeout: {
+    mode: "fallback",
+    message: "Stream source is temporarily delayed. Please retry shortly."
+  },
+  dependency_unavailable: {
+    mode: "fallback",
+    message: "Stream source is temporarily unavailable. Please retry shortly."
+  }
+});
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -356,6 +379,56 @@ function sendErrorStream(req, res, title) {
   });
 }
 
+function normalizeCauseFromReason(reason) {
+  const value = String(reason || "").toLowerCase();
+  if (value === "blocked:shutdown_window") return "policy_shutdown";
+  if (value.startsWith("blocked:")) return "capacity_busy";
+  return "dependency_unavailable";
+}
+
+function classifyReliabilityCause(errorOrReason) {
+  if (typeof errorOrReason === "string") {
+    return normalizeCauseFromReason(errorOrReason);
+  }
+
+  const code = String(errorOrReason && errorOrReason.code ? errorOrReason.code : "").toLowerCase();
+  if (code === "dependency_timeout" || code === "aborterror" || code === "etimedout" || code === "ecanceled") {
+    return "dependency_timeout";
+  }
+
+  if (
+    code.startsWith("redis_") ||
+    code.startsWith("broker_") ||
+    code === "dependency_unavailable" ||
+    code === "econnreset" ||
+    code === "enotfound"
+  ) {
+    return "dependency_unavailable";
+  }
+
+  return "dependency_unavailable";
+}
+
+function buildDegradedStreamPayload(causeInput) {
+  const cause = classifyReliabilityCause(causeInput);
+  const policy = DEGRADED_STREAM_POLICY[cause] || DEGRADED_STREAM_POLICY.dependency_unavailable;
+
+  if (policy.mode === "empty") {
+    return {
+      streams: [],
+      notice: policy.message
+    };
+  }
+
+  return {
+    streams: [formatStream(`⚠️ ${policy.message}`, TEST_VIDEO_URL)]
+  };
+}
+
+function sendDegradedStream(req, res, causeInput) {
+  sendJson(req, res, 200, buildDegradedStreamPayload(causeInput));
+}
+
 async function runAtomicSessionGate(ip, now) {
   const gateScript = `
     local sessions = KEYS[1]
@@ -467,8 +540,8 @@ async function resolveStreamIntent(ip, episodeId) {
 
   if (!finalUrl.startsWith("https://")) {
     return {
-      status: "fallback",
-      message: "Resolved stream is not HTTPS. Try another episode shortly."
+      status: "degraded",
+      cause: "dependency_unavailable"
     };
   }
 
@@ -479,6 +552,12 @@ async function resolveStreamIntent(ip, episodeId) {
     updatedAt: Date.now()
   };
 
+  if (!isCurrentEpisodeSelection(ip, episodeId)) {
+    return {
+      status: "stale"
+    };
+  }
+
   await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
   await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
 
@@ -487,6 +566,56 @@ async function resolveStreamIntent(ip, episodeId) {
     title: resolved.title || "Resolved via Jipi",
     url: finalUrl
   };
+}
+
+function getLatestSelection(clientId) {
+  const latest = latestStreamSelectionByClient.get(clientId);
+  if (!latest) return null;
+
+  if ((Date.now() - latest.updatedAt) > LATEST_SELECTION_TTL_MS) {
+    latestStreamSelectionByClient.delete(clientId);
+    return null;
+  }
+
+  return latest;
+}
+
+function isCurrentEpisodeSelection(clientId, episodeId) {
+  const latest = getLatestSelection(clientId);
+  if (!latest) return true;
+  return latest.episodeId === episodeId;
+}
+
+function markLatestSelection(clientId, episodeId) {
+  latestStreamSelectionVersion += 1;
+  const next = {
+    episodeId,
+    version: latestStreamSelectionVersion,
+    updatedAt: Date.now()
+  };
+  latestStreamSelectionByClient.set(clientId, next);
+  return next;
+}
+
+async function resolveLatestStreamIntent(ip, episodeId) {
+  let currentEpisodeId = episodeId;
+
+  while (true) {
+    const intentKey = `${ip}:${currentEpisodeId}`;
+    const result = await getOrCreateInFlightIntent(intentKey, () => resolveStreamIntent(ip, currentEpisodeId));
+    const latest = getLatestSelection(ip);
+
+    if (result.status === "stale" && latest && latest.episodeId !== currentEpisodeId) {
+      currentEpisodeId = latest.episodeId;
+      continue;
+    }
+
+    if (!latest || latest.episodeId === currentEpisodeId) {
+      return result;
+    }
+
+    currentEpisodeId = latest.episodeId;
+  }
 }
 
 function getOrCreateInFlightIntent(intentKey, producer) {
@@ -591,12 +720,13 @@ async function handleStreamRequest(req, res, pathname, ip) {
     return false;
   }
 
-  const intentKey = `${ip}:${episodeId}`;
-  try {
-    const result = await getOrCreateInFlightIntent(intentKey, () => resolveStreamIntent(ip, episodeId));
+  markLatestSelection(ip, episodeId);
 
-    if (result.status === "fallback") {
-      sendErrorStream(req, res, result.message);
+  try {
+    const result = await resolveLatestStreamIntent(ip, episodeId);
+
+    if (result.status === "degraded") {
+      sendDegradedStream(req, res, result.cause);
       return true;
     }
 
@@ -605,7 +735,12 @@ async function handleStreamRequest(req, res, pathname, ip) {
     });
     return true;
   } catch (err) {
-    await redisCommand(["INCR", "stats:broker_error"]);
+    try {
+      await redisCommand(["INCR", "stats:broker_error"]);
+    } catch {
+      // Best-effort metric path.
+    }
+
     const event = {
       ip,
       error: err.message,
@@ -616,8 +751,8 @@ async function handleStreamRequest(req, res, pathname, ip) {
       await redisCommand(["LPUSH", "quarantine:events", JSON.stringify(event)]);
       await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
     } catch (redisErr) { }
-    
-    sendErrorStream(req, res, "Stream source is temporarily unavailable. Please retry shortly.");
+
+    sendDegradedStream(req, res, err);
     return true;
   }
 }
@@ -731,10 +866,7 @@ module.exports = async function (req, res) {
     
     if (!controlResult.allowed) {
       if (pathname.startsWith("/stream/")) {
-        const errorMsg = controlResult.reason === "blocked:shutdown_window" 
-          ? "Streaming is paused between 00:00 and 08:00 Jerusalem time."
-          : "Stream capacity is currently full. Please try again in a few minutes.";
-        sendErrorStream(req, res, errorMsg);
+        sendDegradedStream(req, res, controlResult.reason);
         return;
       }
       sendPublicError(req, res, 503);
@@ -745,9 +877,9 @@ module.exports = async function (req, res) {
       const handled = await handleStreamRequest(req, res, pathname, controlResult.ip || getTrustedClientIp(req));
       if (handled) return;
     }
-  } catch {
+  } catch (error) {
     if (pathname.startsWith("/stream/")) {
-      sendErrorStream(req, res, "System state is temporarily unavailable. Please retry shortly.");
+      sendDegradedStream(req, res, error);
       return;
     }
     sendPublicError(req, res, 503);
