@@ -69,6 +69,61 @@ function cleanTitle(filename) {
   return name.replace(/\.mp4$/i, "");
 }
 
+function firstNonEmptyString(values = []) {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function extractLinkUrls(links) {
+  if (!Array.isArray(links)) return [];
+  const urls = [];
+  for (const item of links) {
+    if (typeof item === "string") {
+      urls.push(item);
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    urls.push(item.url, item.link, item.href, item.src);
+  }
+  return urls;
+}
+
+function resolveBrokerUrl(data) {
+  const payload = data && typeof data === "object" ? data : {};
+  const nested = payload.result && typeof payload.result === "object" ? payload.result : {};
+
+  const directCandidates = [
+    payload.url,
+    payload.streamUrl,
+    payload.link,
+    nested.url,
+    nested.streamUrl,
+    nested.link,
+    ...extractLinkUrls(payload.links),
+    ...extractLinkUrls(nested.links)
+  ];
+
+  return firstNonEmptyString(directCandidates);
+}
+
+function resolveBrokerFilename(data) {
+  const payload = data && typeof data === "object" ? data : {};
+  const nested = payload.result && typeof payload.result === "object" ? payload.result : {};
+
+  return firstNonEmptyString([
+    payload.filename,
+    payload.fileName,
+    payload.name,
+    nested.filename,
+    nested.fileName,
+    nested.name
+  ]);
+}
+
 function createBrokerClient(options = {}) {
   const baseUrl = String(options.baseUrl || process.env.B_BASE_URL || "");
   const fetchImpl = options.fetchImpl || fetch;
@@ -109,14 +164,17 @@ function createBrokerClient(options = {}) {
       throw new Error("Broker returned non-JSON response");
     }
 
-    if (!data || typeof data.url !== "string" || !data.url) {
+    const resolvedUrl = resolveBrokerUrl(data);
+    if (!resolvedUrl) {
       throw new Error("Broker returned missing url");
     }
 
+    const resolvedFilename = resolveBrokerFilename(data);
+
     return {
-      url: data.url,
-      filename: typeof data.filename === "string" ? data.filename : "",
-      title: cleanTitle(data.filename) || "Resolved via Jipi",
+      url: resolvedUrl,
+      filename: resolvedFilename,
+      title: cleanTitle(resolvedFilename) || "Resolved via Jipi",
       episodeId: id
     };
   }

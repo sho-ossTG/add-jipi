@@ -277,3 +277,34 @@ test("broker resolve timeout path stays within bounded retry budget", async () =
     delete require.cache[require.resolve("../addon")];
   }
 });
+
+test("broker resolve accepts links-array payload shape", async () => {
+  process.env.B_BASE_URL = "https://broker.example";
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          links: [
+            {
+              url: "https://cdn.example.com/onepiece-1-4.mp4",
+              filename: "One Piece S1E4.mp4"
+            }
+          ]
+        };
+      }
+    };
+  };
+
+  try {
+    const addon = loadAddon();
+    const resolved = await addon.resolveEpisode("tt0388629:1:4");
+    assert.equal(resolved.url, "https://cdn.example.com/onepiece-1-4.mp4");
+  } finally {
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../addon")];
+  }
+});
