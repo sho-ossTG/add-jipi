@@ -1,4 +1,6 @@
 const { getRouter } = require("stremio-addon-sdk");
+const crypto = require("node:crypto");
+const proxyaddr = require("proxy-addr");
 const addonInterface = require("./addon");
 
 const router = getRouter(addonInterface);
@@ -12,6 +14,10 @@ const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/108
 
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const NEUTRAL_ORIGIN = "https://www.google.com/";
+
+const DEFAULT_TRUST_PROXY = "loopback,linklocal,uniquelocal";
+const DEFAULT_CORS_HEADERS = "Content-Type,Authorization,X-Operator-Token";
+const DEFAULT_CORS_METHODS = "GET,OPTIONS";
 
 function getRedisConfig() {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
@@ -54,16 +60,27 @@ async function redisCommand(command) {
   return item.result;
 }
 
-function getClientIp(req) {
-  const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff.trim()) {
-    return xff.split(",")[0].trim();
+function parseCsv(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getTrustedProxy() {
+  const trustValue = process.env.TRUST_PROXY || DEFAULT_TRUST_PROXY;
+  const trustList = parseCsv(trustValue);
+  return proxyaddr.compile(trustList.length ? trustList : ["loopback"]);
+}
+
+function getTrustedClientIp(req) {
+  try {
+    const proxyReq = req.connection ? req : { ...req, connection: req.socket };
+    const trusted = proxyaddr(proxyReq, getTrustedProxy());
+    return trusted || "unknown";
+  } catch {
+    return (req.socket && req.socket.remoteAddress) || (req.connection && req.connection.remoteAddress) || "unknown";
   }
-  const realIp = req.headers["x-real-ip"];
-  if (typeof realIp === "string" && realIp.trim()) {
-    return realIp.trim();
-  }
-  return (req.socket && req.socket.remoteAddress) || "unknown";
 }
 
 function getJerusalemInfo() {
@@ -102,11 +119,122 @@ function isStremioRoute(pathname) {
   return pathname === "/manifest.json" || pathname.startsWith("/catalog/") || pathname.startsWith("/stream/");
 }
 
-function sendJson(res, statusCode, payload) {
+function classifyRoute(pathname) {
+  if (pathname === "/quarantine" || pathname === "/health/details" || pathname.startsWith("/admin/")) {
+    return "operator";
+  }
+  if (isStremioRoute(pathname)) {
+    return "stremio";
+  }
+  return "public";
+}
+
+function secureEquals(left, right) {
+  const a = Buffer.from(String(left || ""));
+  const b = Buffer.from(String(right || ""));
+  if (a.length === 0 || b.length === 0 || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function extractOperatorToken(req) {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+
+  const headerToken = req.headers["x-operator-token"];
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+
+  return "";
+}
+
+function authorizeOperator(req) {
+  const expected = process.env.OPERATOR_TOKEN || "";
+  if (!expected) {
+    return { allowed: false, statusCode: 401, error: "operator_auth_unconfigured" };
+  }
+
+  const provided = extractOperatorToken(req);
+  if (!provided) {
+    return { allowed: false, statusCode: 401, error: "operator_token_required" };
+  }
+
+  if (!secureEquals(provided, expected)) {
+    return { allowed: false, statusCode: 403, error: "operator_forbidden" };
+  }
+
+  return { allowed: true };
+}
+
+function getCorsPolicy() {
+  const origins = new Set(parseCsv(process.env.CORS_ALLOW_ORIGINS));
+  const headers = parseCsv(process.env.CORS_ALLOW_HEADERS || DEFAULT_CORS_HEADERS).map((item) => item.toLowerCase());
+  const methods = parseCsv(process.env.CORS_ALLOW_METHODS || DEFAULT_CORS_METHODS);
+
+  return {
+    origins,
+    headers,
+    methods
+  };
+}
+
+function applyCors(req, res) {
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+  if (!origin) {
+    return { hasOrigin: false, originAllowed: false };
+  }
+
+  const policy = getCorsPolicy();
+  if (!policy.origins.has(origin)) {
+    return { hasOrigin: true, originAllowed: false };
+  }
+
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  return { hasOrigin: true, originAllowed: true, policy };
+}
+
+function handlePreflight(req, res) {
+  if (req.method !== "OPTIONS") return false;
+
+  const cors = applyCors(req, res);
+  if (!cors.originAllowed) {
+    res.statusCode = 204;
+    res.end();
+    return true;
+  }
+
+  const requestedHeaders = parseCsv(req.headers["access-control-request-headers"]).map((item) => item.toLowerCase());
+  const invalidHeader = requestedHeaders.find((header) => !cors.policy.headers.includes(header));
+  if (invalidHeader) {
+    res.statusCode = 403;
+    sendJson(req, res, 403, { error: "cors_header_not_allowed" });
+    return true;
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", cors.policy.methods.join(","));
+  res.setHeader("Access-Control-Allow-Headers", cors.policy.headers.join(","));
+  res.statusCode = 204;
+  res.end();
+  return true;
+}
+
+function redactIp(ip) {
+  if (!ip || ip === "unknown") return "unknown";
+  return "[redacted]";
+}
+
+function sanitizeInternalError(errorValue) {
+  if (!errorValue) return "internal_error";
+  return "internal_error";
+}
+
+function sendJson(req, res, statusCode, payload) {
+  applyCors(req, res);
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "*");
   res.end(JSON.stringify(payload));
 }
 
@@ -121,8 +249,8 @@ function formatStream(title, url) {
   };
 }
 
-function sendErrorStream(res, title) {
-  sendJson(res, 200, {
+function sendErrorStream(req, res, title) {
+  sendJson(req, res, 200, {
     streams: [formatStream(`⚠️ ${title}`, TEST_VIDEO_URL)]
   });
 }
@@ -188,7 +316,7 @@ async function applyRequestControls(req, pathname) {
     }
   }
 
-  const ip = getClientIp(req);
+  const ip = getTrustedClientIp(req);
   const sessionsKey = "system:active_sessions";
   const now = Date.now();
   const cutoff = now - (INACTIVITY_LIMIT * 1000);
@@ -216,7 +344,7 @@ async function applyRequestControls(req, pathname) {
   return { allowed: true, ip };
 }
 
-async function handleStreamRequest(res, pathname, ip) {
+async function handleStreamRequest(req, res, pathname, ip) {
   const match = pathname.match(/^\/stream\/([^/]+)\/([^/]+)\.json$/);
   if (!match || match[1] !== "series") return false;
   
@@ -237,7 +365,7 @@ async function handleStreamRequest(res, pathname, ip) {
       const existing = JSON.parse(existingRaw);
       if (existing.episodeId === episodeId) {
         await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
-        sendJson(res, 200, {
+        sendJson(req, res, 200, {
           streams: [formatStream(existing.title || "Resolved via Jipi", existing.url)]
         });
         return true;
@@ -256,9 +384,9 @@ async function handleStreamRequest(res, pathname, ip) {
     }
 
     if (!finalUrl.startsWith("https://")) {
-      sendErrorStream(res, "Resolved stream is not HTTPS. Try another episode shortly.");
-      return true;
-    }
+        sendErrorStream(req, res, "Resolved stream is not HTTPS. Try another episode shortly.");
+        return true;
+      }
 
     const payload = {
       url: finalUrl,
@@ -270,7 +398,7 @@ async function handleStreamRequest(res, pathname, ip) {
     await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
     await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
 
-    sendJson(res, 200, {
+    sendJson(req, res, 200, {
       streams: [formatStream(resolved.title || "Resolved via Jipi", finalUrl)]
     });
     return true;
@@ -287,19 +415,29 @@ async function handleStreamRequest(res, pathname, ip) {
       await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
     } catch (redisErr) { }
     
-    sendErrorStream(res, "Stream source is temporarily unavailable. Please retry shortly.");
+    sendErrorStream(req, res, "Stream source is temporarily unavailable. Please retry shortly.");
     return true;
   }
 }
 
-async function handleQuarantine(res) {
+async function handleQuarantine(req, res) {
   const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
   const slotTaken = await redisCommand(["GET", "stats:slot_taken"]) || 0;
   const brokerErrors = await redisCommand(["GET", "stats:broker_error"]) || 0;
   const activeCount = await redisCommand(["ZCARD", "system:active_sessions"]) || 0;
 
   const events = eventsRaw.map(e => {
-    try { return JSON.parse(e); } catch { return { error: "Parse error", raw: e }; }
+    try {
+      const event = JSON.parse(e);
+      return {
+        time: event.time || "",
+        ip: redactIp(event.ip),
+        episodeId: event.episodeId || "",
+        error: sanitizeInternalError(event.error)
+      };
+    } catch {
+      return { time: "", ip: "unknown", episodeId: "", error: "internal_error" };
+    }
   });
 
   const rows = events.map(e => `
@@ -333,35 +471,55 @@ async function handleQuarantine(res) {
   `;
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html");
+  applyCors(req, res);
   res.end(html);
 }
 
 module.exports = async function (req, res) {
   const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const pathname = reqUrl.pathname;
+  const routeType = classifyRoute(pathname);
+
+  if (handlePreflight(req, res)) {
+    return;
+  }
+
+  if (routeType === "operator") {
+    const authz = authorizeOperator(req);
+    if (!authz.allowed) {
+      sendJson(req, res, authz.statusCode, { error: authz.error });
+      return;
+    }
+  }
 
   if (pathname === "/") {
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html");
+    applyCors(req, res);
     res.end(getLandingPageHtml());
     return;
   }
 
   if (pathname === "/health") {
+    sendJson(req, res, 200, { status: "OK" });
+    return;
+  }
+
+  if (pathname === "/health/details") {
     try {
       await redisCommand(["PING"]);
-      sendJson(res, 200, { status: "OK", redis: "Connected" });
-    } catch (e) {
-      sendJson(res, 500, { status: "FAIL", error: e.message });
+      sendJson(req, res, 200, { status: "OK", redis: "connected" });
+    } catch {
+      sendJson(req, res, 503, { status: "FAIL", error: "dependency_unavailable" });
     }
     return;
   }
 
   if (pathname === "/quarantine") {
     try {
-      await handleQuarantine(res);
-    } catch (e) {
-      sendJson(res, 500, { error: e.message });
+      await handleQuarantine(req, res);
+    } catch {
+      sendJson(req, res, 500, { error: "internal_error" });
     }
     return;
   }
@@ -374,26 +532,27 @@ module.exports = async function (req, res) {
         const errorMsg = controlResult.reason === "blocked:shutdown_window" 
           ? "Streaming is paused between 00:00 and 08:00 Jerusalem time."
           : "Stream capacity is currently full. Please try again in a few minutes.";
-        sendErrorStream(res, errorMsg);
+        sendErrorStream(req, res, errorMsg);
         return;
       }
-      sendJson(res, 503, { error: "Addon temporarily unavailable", reason: controlResult.reason });
+      sendJson(req, res, 503, { error: "service_unavailable" });
       return;
     }
 
     if (pathname.startsWith("/stream/")) {
-      const handled = await handleStreamRequest(res, pathname, controlResult.ip || getClientIp(req));
+      const handled = await handleStreamRequest(req, res, pathname, controlResult.ip || getTrustedClientIp(req));
       if (handled) return;
     }
-  } catch (error) {
+  } catch {
     if (pathname.startsWith("/stream/")) {
-      sendErrorStream(res, "System state is temporarily unavailable. Please retry shortly.");
+      sendErrorStream(req, res, "System state is temporarily unavailable. Please retry shortly.");
       return;
     }
-    sendJson(res, 503, { error: "Addon error", message: error.message });
+    sendJson(req, res, 503, { error: "service_unavailable" });
     return;
   }
 
+  applyCors(req, res);
   router(req, res, () => {
     res.statusCode = 404;
     res.end();
