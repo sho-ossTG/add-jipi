@@ -376,6 +376,21 @@ function sendDegradedStream(req, res, causeInput) {
   sendJson(req, res, 200, buildDegradedStreamPayload(causeInput));
 }
 
+const requestControlDependencies = Object.freeze({
+  isStremioRoute,
+  getTrustedClientIp,
+  redisCommand,
+  redisEval,
+  emitTelemetry,
+  classifyFailure,
+  events: EVENTS,
+  slotTtlSec: SLOT_TTL,
+  inactivityLimitSec: INACTIVITY_LIMIT,
+  maxSessions: MAX_SESSIONS,
+  reconnectGraceMs: RECONNECT_GRACE_MS,
+  rotationIdleMs: ROTATION_IDLE_MS
+});
+
 async function resolveStreamIntent(ip, episodeId) {
   const activeUrlKey = `active:url:${ip}`;
   const lastSeenKey = `active:last_seen:${ip}`;
@@ -570,26 +585,6 @@ function getLandingPageHtml() {
 </body>
 </html>
   `.trim();
-}
-
-async function applyRequestControls(req, pathname) {
-  return applyRoutingRequestControls(
-    { req, pathname },
-    {
-      isStremioRoute,
-      getTrustedClientIp,
-      redisCommand,
-      redisEval,
-      emitTelemetry,
-      classifyFailure,
-      events: EVENTS,
-      slotTtlSec: SLOT_TTL,
-      inactivityLimitSec: INACTIVITY_LIMIT,
-      maxSessions: MAX_SESSIONS,
-      reconnectGraceMs: RECONNECT_GRACE_MS,
-      rotationIdleMs: ROTATION_IDLE_MS
-    }
-  );
 }
 
 async function handleStreamRequest(req, res, pathname, ip) {
@@ -837,7 +832,10 @@ module.exports = async function (req, res) {
       }
 
       try {
-        const controlResult = await applyRequestControls(req, pathname);
+        const controlResult = await applyRoutingRequestControls(
+          { req, pathname },
+          requestControlDependencies
+        );
 
         if (!controlResult.allowed) {
           const deniedCause = classifyReliabilityCause(controlResult.reason || "blocked:slot_taken");
