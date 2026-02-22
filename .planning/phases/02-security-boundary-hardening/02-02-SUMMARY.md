@@ -53,7 +53,7 @@ Each task was committed atomically:
 1. **Task 1: Implement explicit allowlist CORS matrix and preflight handling** - `f008be0` (fix)
 2. **Task 2: Add CORS contract tests and script wiring** - `ac79a69` (test)
 
-**Plan metadata:** Pending docs commit for summary/state artifacts.
+**Plan metadata:** `5234eee` (docs)
 
 ## Files Created/Modified
 - `serverless.js` - Added strict preflight method validation and robust `Vary: Origin` handling.
@@ -69,7 +69,8 @@ Each task was committed atomically:
 None - plan executed exactly as written.
 
 ## Issues Encountered
-None.
+- `gsd-tools state advance-plan` and `state record-session` could not parse legacy STATE.md headings; session lines were updated directly in `STATE.md`.
+- `gsd-tools commit` argument parsing treated message tokens as pathspecs; completed metadata commit via direct `git commit` fallback.
 
 ## User Setup Required
 
