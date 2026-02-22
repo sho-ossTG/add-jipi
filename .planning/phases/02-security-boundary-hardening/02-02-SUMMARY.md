@@ -53,7 +53,7 @@ Each task was committed atomically:
 1. **Task 1: Implement explicit allowlist CORS matrix and preflight handling** - `f008be0` (fix)
 2. **Task 2: Add CORS contract tests and script wiring** - `ac79a69` (test)
 
-**Plan metadata:** `5234eee` (docs)
+**Plan metadata:** `docs(02-02)` commits recorded in git history.
 
 ## Files Created/Modified
 - `serverless.js` - Added strict preflight method validation and robust `Vary: Origin` handling.
