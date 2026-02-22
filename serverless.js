@@ -10,6 +10,11 @@ const SLOT_TTL = 3600;
 const INACTIVITY_LIMIT = 20 * 60; 
 const MAX_SESSIONS = 2; 
 const ACTIVE_URL_TTL = 3600 * 2; 
+const RECONNECT_GRACE_MS = 15000;
+const ROTATION_IDLE_MS = 45000;
+const DEPENDENCY_ATTEMPT_TIMEOUT_MS = 900;
+const DEPENDENCY_TOTAL_TIMEOUT_MS = 1800;
+const DEPENDENCY_RETRY_JITTER_MS = 120;
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -18,6 +23,69 @@ const NEUTRAL_ORIGIN = "https://www.google.com/";
 const DEFAULT_TRUST_PROXY = "loopback,linklocal,uniquelocal";
 const DEFAULT_CORS_HEADERS = "Content-Type,Authorization,X-Operator-Token";
 const DEFAULT_CORS_METHODS = "GET,OPTIONS";
+
+const inFlightStreamIntents = new Map();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomJitter(maxMs) {
+  return Math.floor(Math.random() * Math.max(1, maxMs));
+}
+
+function isTransientDependencyFailure(error) {
+  if (!error) return false;
+  const status = Number(error.statusCode || 0);
+  if (status === 408 || status === 429 || status >= 500) return true;
+  const code = String(error.code || "").toLowerCase();
+  return code === "aborterror" || code === "etimedout" || code === "ecanceled" || code === "econnreset";
+}
+
+async function executeBoundedDependency(operation, options = {}) {
+  const {
+    attemptTimeoutMs = DEPENDENCY_ATTEMPT_TIMEOUT_MS,
+    totalBudgetMs = DEPENDENCY_TOTAL_TIMEOUT_MS,
+    jitterMs = DEPENDENCY_RETRY_JITTER_MS
+  } = options;
+
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError;
+
+  while (attempt < 2) {
+    const elapsed = Date.now() - startedAt;
+    const remaining = totalBudgetMs - elapsed;
+    if (remaining <= 0) {
+      const timeoutError = new Error("Dependency operation timed out");
+      timeoutError.code = "dependency_timeout";
+      throw timeoutError;
+    }
+
+    const timeout = Math.max(1, Math.min(attemptTimeoutMs, remaining));
+
+    try {
+      return await operation({ timeout });
+    } catch (error) {
+      lastError = error;
+      const canRetry = attempt === 0 && isTransientDependencyFailure(error);
+      if (!canRetry) break;
+
+      const postAttemptElapsed = Date.now() - startedAt;
+      const postAttemptRemaining = totalBudgetMs - postAttemptElapsed;
+      if (postAttemptRemaining <= 1) break;
+
+      const jitterDelay = Math.min(randomJitter(jitterMs), postAttemptRemaining - 1);
+      if (jitterDelay > 0) {
+        await sleep(jitterDelay);
+      }
+    }
+
+    attempt += 1;
+  }
+
+  throw lastError;
+}
 
 function getRedisConfig() {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
@@ -33,20 +101,26 @@ async function redisCommand(command) {
     throw err;
   }
 
-  const response = await fetch(`${url}/pipeline`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify([command])
-  });
+  const response = await executeBoundedDependency(async ({ timeout }) => {
+    const nextResponse = await fetch(`${url}/pipeline`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify([command]),
+      signal: AbortSignal.timeout(timeout)
+    });
 
-  if (!response.ok) {
-    const err = new Error(`Redis request failed with status ${response.status}`);
-    err.code = "redis_http_error";
-    throw err;
-  }
+    if (!nextResponse.ok) {
+      const err = new Error(`Redis request failed with status ${nextResponse.status}`);
+      err.code = "redis_http_error";
+      err.statusCode = nextResponse.status;
+      throw err;
+    }
+
+    return nextResponse;
+  });
 
   const data = await response.json();
   const item = Array.isArray(data) ? data[0] : null;
@@ -58,6 +132,17 @@ async function redisCommand(command) {
   }
 
   return item.result;
+}
+
+async function redisEval(script, keys = [], args = []) {
+  const command = [
+    "EVAL",
+    script,
+    String(keys.length),
+    ...keys,
+    ...args.map((value) => String(value))
+  ];
+  return redisCommand(command);
 }
 
 function parseCsv(value) {
@@ -271,6 +356,154 @@ function sendErrorStream(req, res, title) {
   });
 }
 
+async function runAtomicSessionGate(ip, now) {
+  const gateScript = `
+    local sessions = KEYS[1]
+    local currentIp = ARGV[1]
+    local nowMs = tonumber(ARGV[2])
+    local pruneCutoff = tonumber(ARGV[3])
+    local maxSessions = tonumber(ARGV[4])
+    local slotTtlSec = tonumber(ARGV[5])
+    local reconnectGraceMs = tonumber(ARGV[6])
+    local idleCutoff = tonumber(ARGV[7])
+
+    redis.call("ZREMRANGEBYSCORE", sessions, "-inf", tostring(pruneCutoff))
+
+    local existingScore = redis.call("ZSCORE", sessions, currentIp)
+    if existingScore then
+      redis.call("ZADD", sessions, tostring(nowMs), currentIp)
+      redis.call("EXPIRE", sessions, slotTtlSec)
+      return {1, "admitted:existing", "", redis.call("ZCARD", sessions)}
+    end
+
+    local activeCount = tonumber(redis.call("ZCARD", sessions))
+    if activeCount < maxSessions then
+      redis.call("ZADD", sessions, tostring(nowMs), currentIp)
+      redis.call("EXPIRE", sessions, slotTtlSec)
+      return {1, "admitted:new", "", redis.call("ZCARD", sessions)}
+    end
+
+    local members = redis.call("ZRANGE", sessions, 0, -1, "WITHSCORES")
+    local rotatedIp = nil
+    local rotatedScore = nil
+
+    for i = 1, #members, 2 do
+      local candidateIp = members[i]
+      local candidateScore = tonumber(members[i + 1])
+      if candidateIp ~= currentIp then
+        local idleEnough = candidateScore <= idleCutoff
+        local outsideGrace = (nowMs - candidateScore) >= reconnectGraceMs
+        if idleEnough and outsideGrace then
+          if (not rotatedScore) or (candidateScore < rotatedScore) or (candidateScore == rotatedScore and candidateIp < rotatedIp) then
+            rotatedIp = candidateIp
+            rotatedScore = candidateScore
+          end
+        end
+      end
+    end
+
+    if rotatedIp then
+      redis.call("ZREM", sessions, rotatedIp)
+      redis.call("ZADD", sessions, tostring(nowMs), currentIp)
+      redis.call("EXPIRE", sessions, slotTtlSec)
+      return {1, "admitted:rotated", rotatedIp, redis.call("ZCARD", sessions)}
+    end
+
+    return {0, "blocked:slot_taken", "", activeCount}
+  `;
+
+  const sessionsKey = "system:active_sessions";
+  const gateResult = await redisEval(gateScript, [sessionsKey], [
+    ip,
+    String(now),
+    String(now - (INACTIVITY_LIMIT * 1000)),
+    String(MAX_SESSIONS),
+    String(SLOT_TTL),
+    String(RECONNECT_GRACE_MS),
+    String(now - ROTATION_IDLE_MS)
+  ]);
+
+  if (!Array.isArray(gateResult) || gateResult.length < 2) {
+    const err = new Error("Invalid atomic gate response");
+    err.code = "redis_gate_invalid";
+    throw err;
+  }
+
+  return {
+    allowed: Number(gateResult[0]) === 1,
+    reason: String(gateResult[1] || ""),
+    rotatedIp: gateResult[2] ? String(gateResult[2]) : "",
+    activeCount: Number(gateResult[3] || 0)
+  };
+}
+
+async function resolveStreamIntent(ip, episodeId) {
+  const activeUrlKey = `active:url:${ip}`;
+  const lastSeenKey = `active:last_seen:${ip}`;
+
+  const existingRaw = await redisCommand(["GET", activeUrlKey]);
+  if (existingRaw) {
+    try {
+      const existing = JSON.parse(existingRaw);
+      if (existing.episodeId === episodeId) {
+        await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
+        return {
+          status: "ok",
+          title: existing.title || "Resolved via Jipi",
+          url: existing.url
+        };
+      }
+    } catch {
+      // Ignore malformed cache payload and re-resolve.
+    }
+  }
+
+  const resolved = await addonInterface.resolveEpisode(episodeId);
+  let finalUrl = resolved.url || "";
+
+  if (finalUrl.startsWith("http://")) {
+    finalUrl = finalUrl.replace("http://", "https://");
+  }
+
+  if (!finalUrl.startsWith("https://")) {
+    return {
+      status: "fallback",
+      message: "Resolved stream is not HTTPS. Try another episode shortly."
+    };
+  }
+
+  const payload = {
+    url: finalUrl,
+    episodeId,
+    title: resolved.title,
+    updatedAt: Date.now()
+  };
+
+  await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
+  await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
+
+  return {
+    status: "ok",
+    title: resolved.title || "Resolved via Jipi",
+    url: finalUrl
+  };
+}
+
+function getOrCreateInFlightIntent(intentKey, producer) {
+  if (inFlightStreamIntents.has(intentKey)) {
+    return inFlightStreamIntents.get(intentKey);
+  }
+
+  const inFlight = Promise.resolve()
+    .then(() => producer())
+    .finally(() => {
+      inFlightStreamIntents.delete(intentKey);
+    });
+
+  inFlightStreamIntents.set(intentKey, inFlight);
+  return inFlight;
+}
+
 function getLandingPageHtml() {
   return `
 <!DOCTYPE html>
@@ -333,29 +566,16 @@ async function applyRequestControls(req, pathname) {
   }
 
   const ip = getTrustedClientIp(req);
-  const sessionsKey = "system:active_sessions";
   const now = Date.now();
-  const cutoff = now - (INACTIVITY_LIMIT * 1000);
 
-  // Cleanup expired sessions
-  await redisCommand(["ZREMRANGEBYSCORE", sessionsKey, "-inf", String(cutoff)]);
-
-  // Check concurrency
-  const score = await redisCommand(["ZSCORE", sessionsKey, ip]);
-  const count = await redisCommand(["ZCARD", sessionsKey]);
-
-  if (score === null && count >= MAX_SESSIONS) {
+  const gateDecision = await runAtomicSessionGate(ip, now);
+  if (!gateDecision.allowed) {
     await redisCommand(["INCR", "stats:slot_taken"]);
     return {
       allowed: false,
-      reason: "blocked:slot_taken",
-      debug: { activeCount: count, currentIp: ip }
+      reason: gateDecision.reason || "blocked:slot_taken"
     };
   }
-
-  // Refresh/Add session (Heartbeat)
-  await redisCommand(["ZADD", sessionsKey, String(now), ip]);
-  await redisCommand(["EXPIRE", sessionsKey, String(SLOT_TTL)]);
 
   return { allowed: true, ip };
 }
@@ -371,51 +591,17 @@ async function handleStreamRequest(req, res, pathname, ip) {
     return false;
   }
 
-  const activeUrlKey = `active:url:${ip}`;
-  const lastSeenKey = `active:last_seen:${ip}`;
-
-  // Check cache for same episode
-  const existingRaw = await redisCommand(["GET", activeUrlKey]);
-  if (existingRaw) {
-    try {
-      const existing = JSON.parse(existingRaw);
-      if (existing.episodeId === episodeId) {
-        await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
-        sendJson(req, res, 200, {
-          streams: [formatStream(existing.title || "Resolved via Jipi", existing.url)]
-        });
-        return true;
-      }
-    } catch (e) { }
-  }
-
-  // Resolve via B
+  const intentKey = `${ip}:${episodeId}`;
   try {
-    const resolved = await addonInterface.resolveEpisode(episodeId);
-    let finalUrl = resolved.url || "";
-    
-    // Enforce HTTPS
-    if (finalUrl.startsWith("http://")) {
-      finalUrl = finalUrl.replace("http://", "https://");
+    const result = await getOrCreateInFlightIntent(intentKey, () => resolveStreamIntent(ip, episodeId));
+
+    if (result.status === "fallback") {
+      sendErrorStream(req, res, result.message);
+      return true;
     }
 
-    if (!finalUrl.startsWith("https://")) {
-        sendErrorStream(req, res, "Resolved stream is not HTTPS. Try another episode shortly.");
-        return true;
-      }
-
-    const payload = {
-      url: finalUrl,
-      episodeId,
-      title: resolved.title,
-      updatedAt: Date.now()
-    };
-    
-    await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
-    await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
-
     sendJson(req, res, 200, {
-      streams: [formatStream(resolved.title || "Resolved via Jipi", finalUrl)]
+      streams: [formatStream(result.title, result.url)]
     });
     return true;
   } catch (err) {
