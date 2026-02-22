@@ -64,14 +64,14 @@ function withFixedJerusalemTime(run, hour = "12") {
     });
 }
 
-function createRedisRuntime() {
+function createRedisRuntime(options = {}) {
   const state = {
     strings: new Map(),
     hashes: new Map()
   };
 
-  async function fetch(_url, options = {}) {
-    const payload = JSON.parse(options.body || "[]");
+  async function fetch(_url, requestOptions = {}) {
+    const payload = JSON.parse(requestOptions.body || "[]");
     const command = Array.isArray(payload) ? payload[0] : [];
     const op = String(command[0] || "").toUpperCase();
     const key = String(command[1] || "");
@@ -116,6 +116,16 @@ function createRedisRuntime() {
       result = "OK";
     }
 
+    if (op === "PING" && options.failPing) {
+      return {
+        ok: false,
+        status: 503,
+        async json() {
+          return [{ error: "ping_failed" }];
+        }
+      };
+    }
+
     if (op === "PING") {
       result = "PONG";
     }
@@ -129,6 +139,15 @@ function createRedisRuntime() {
   }
 
   return { fetch };
+}
+
+function assertSanitizedDiagnosticsPayload(payload) {
+  const serialized = JSON.stringify(payload).toLowerCase();
+  assert.doesNotMatch(serialized, /authorization/);
+  assert.doesNotMatch(serialized, /x-forwarded-for/);
+  assert.doesNotMatch(serialized, /198\.51\.100\./);
+  assert.doesNotMatch(serialized, /stack/);
+  assert.doesNotMatch(serialized, /https?:\/\//);
 }
 
 function loadServerless() {
@@ -308,16 +327,58 @@ test("operator metrics expose bounded reliability labels and redact sensitive fi
       assert.ok(payload.reliability.boundedDimensions.result.includes(metric.labels.result));
     }
 
-    const serialized = JSON.stringify(payload).toLowerCase();
-    assert.doesNotMatch(serialized, /authorization/);
-    assert.doesNotMatch(serialized, /x-forwarded-for/);
-    assert.doesNotMatch(serialized, /198\.51\.100\./);
-    assert.doesNotMatch(serialized, /stack/);
-    assert.doesNotMatch(serialized, /https?:\/\//);
+    assertSanitizedDiagnosticsPayload(payload);
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../serverless")];
     delete require.cache[require.resolve("../addon")];
+  }
+});
+
+test("health details uses projector-shaped sanitized payloads for success and degraded branches", async () => {
+  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token";
+  process.env.OPERATOR_TOKEN = "top-secret";
+
+  const originalFetch = global.fetch;
+  const successRuntime = createRedisRuntime();
+  global.fetch = successRuntime.fetch;
+
+  const handler = loadServerless();
+
+  try {
+    const successResponse = await runRequest(handler, "/health/details", {
+      headers: { authorization: "Bearer top-secret" }
+    });
+
+    assert.equal(successResponse.statusCode, 200);
+    const successPayload = JSON.parse(successResponse.body);
+    assert.equal(successPayload.status, "OK");
+    assert.equal(successPayload.dependencies.redis, "connected");
+    assert.ok(successPayload.reliability);
+    assert.equal(typeof successPayload.generatedAt, "string");
+    assert.equal(Object.hasOwn(successPayload, "redis"), false);
+    assert.equal(Object.hasOwn(successPayload, "error"), false);
+    assertSanitizedDiagnosticsPayload(successPayload);
+
+    const degradedRuntime = createRedisRuntime({ failPing: true });
+    global.fetch = degradedRuntime.fetch;
+    const degradedResponse = await runRequest(handler, "/health/details", {
+      headers: { authorization: "Bearer top-secret" }
+    });
+
+    assert.equal(degradedResponse.statusCode, 503);
+    const degradedPayload = JSON.parse(degradedResponse.body);
+    assert.equal(degradedPayload.status, "DEGRADED");
+    assert.equal(degradedPayload.dependencies.redis, "unavailable");
+    assert.ok(degradedPayload.reliability);
+    assert.equal(typeof degradedPayload.generatedAt, "string");
+    assert.equal(Object.hasOwn(degradedPayload, "redis"), false);
+    assert.equal(Object.hasOwn(degradedPayload, "error"), false);
+    assertSanitizedDiagnosticsPayload(degradedPayload);
+  } finally {
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../serverless")];
   }
 });

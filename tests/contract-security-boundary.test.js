@@ -173,7 +173,20 @@ test("operator diagnostics routes allow authorized requests", async () => {
   });
 
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(JSON.parse(response.body), { status: "OK", redis: "connected" });
+  const healthPayload = JSON.parse(response.body);
+  assert.equal(healthPayload.status, "OK");
+  assert.equal(healthPayload.dependencies.redis, "connected");
+  assert.ok(healthPayload.reliability);
+  assert.equal(typeof healthPayload.generatedAt, "string");
+  assert.equal(Object.hasOwn(healthPayload, "redis"), false);
+  assert.equal(Object.hasOwn(healthPayload, "error"), false);
+
+  const healthSerialized = JSON.stringify(healthPayload).toLowerCase();
+  assert.doesNotMatch(healthSerialized, /authorization/);
+  assert.doesNotMatch(healthSerialized, /x-forwarded-for/);
+  assert.doesNotMatch(healthSerialized, /198\.51\.100\./);
+  assert.doesNotMatch(healthSerialized, /stack/);
+  assert.doesNotMatch(healthSerialized, /https?:\/\//);
 
   const metricsResponse = await request("/operator/metrics", {
     headers: {
