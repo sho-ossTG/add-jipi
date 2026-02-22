@@ -231,6 +231,10 @@ function sanitizeInternalError(errorValue) {
   return "internal_error";
 }
 
+function sendPublicError(req, res, statusCode = 503) {
+  sendJson(req, res, statusCode, { error: "service_unavailable" });
+}
+
 function sendJson(req, res, statusCode, payload) {
   applyCors(req, res);
   res.statusCode = statusCode;
@@ -535,7 +539,7 @@ module.exports = async function (req, res) {
         sendErrorStream(req, res, errorMsg);
         return;
       }
-      sendJson(req, res, 503, { error: "service_unavailable" });
+      sendPublicError(req, res, 503);
       return;
     }
 
@@ -548,7 +552,7 @@ module.exports = async function (req, res) {
       sendErrorStream(req, res, "System state is temporarily unavailable. Please retry shortly.");
       return;
     }
-    sendJson(req, res, 503, { error: "service_unavailable" });
+    sendPublicError(req, res, 503);
     return;
   }
 
