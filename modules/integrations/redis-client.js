@@ -71,14 +71,30 @@ function getRedisConfig(options = {}) {
 }
 
 function createRedisClient(options = {}) {
-  const fetchImpl = options.fetchImpl || fetch;
+  const customFetchImpl = options.fetchImpl;
   const boundedDependency = options.executeBoundedDependency || executeBoundedDependency;
-  const config = getRedisConfig(options);
+  const staticUrl = options.url;
+  const staticToken = options.token;
+  const env = options.env;
+
+  function getCurrentConfig() {
+    return getRedisConfig({
+      env,
+      url: staticUrl,
+      token: staticToken
+    });
+  }
+
+  function getFetchImpl() {
+    return customFetchImpl || fetch;
+  }
 
   async function command(parts) {
     if (!Array.isArray(parts) || parts.length === 0) {
       throw new Error("Redis command must be a non-empty array");
     }
+
+    const config = getCurrentConfig();
 
     if (!config.url || !config.token) {
       const err = new Error("Missing Redis configuration");
@@ -87,7 +103,7 @@ function createRedisClient(options = {}) {
     }
 
     const response = await boundedDependency(async ({ timeout }) => {
-      const nextResponse = await fetchImpl(`${config.url}/pipeline`, {
+      const nextResponse = await getFetchImpl()(`${config.url}/pipeline`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.token}`,
@@ -132,7 +148,7 @@ function createRedisClient(options = {}) {
   return {
     command,
     eval: evalScript,
-    getConfig: () => ({ ...config })
+    getConfig: () => ({ ...getCurrentConfig() })
   };
 }
 

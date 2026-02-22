@@ -4,6 +4,8 @@ const addonInterface = require("./addon");
 const { authorizeOperator } = require("./modules/policy/operator-auth");
 const { createRedisClient } = require("./modules/integrations/redis-client");
 const { applyRequestControls: applyRoutingRequestControls } = require("./modules/routing/request-controls");
+const { handleStreamRequest: applyRoutingStreamRequest } = require("./modules/routing/stream-route");
+const { sendDegradedStream } = require("./modules/presentation/stream-payloads");
 const {
   withRequestContext,
   bindResponseCorrelationId,
@@ -30,12 +32,11 @@ const router = getRouter(addonInterface);
 const SLOT_TTL = 3600; 
 const INACTIVITY_LIMIT = 20 * 60; 
 const MAX_SESSIONS = 2; 
-const ACTIVE_URL_TTL = 3600 * 2; 
-const RECONNECT_GRACE_MS = 15000;
-const ROTATION_IDLE_MS = 45000;
 const DEPENDENCY_ATTEMPT_TIMEOUT_MS = 900;
 const DEPENDENCY_TOTAL_TIMEOUT_MS = 1800;
 const DEPENDENCY_RETRY_JITTER_MS = 120;
+const RECONNECT_GRACE_MS = 15000;
+const ROTATION_IDLE_MS = 45000;
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -44,12 +45,6 @@ const NEUTRAL_ORIGIN = "https://www.google.com/";
 const DEFAULT_TRUST_PROXY = "loopback,linklocal,uniquelocal";
 const DEFAULT_CORS_HEADERS = "Content-Type,Authorization,X-Operator-Token";
 const DEFAULT_CORS_METHODS = "GET,OPTIONS";
-
-const inFlightStreamIntents = new Map();
-const latestStreamSelectionByClient = new Map();
-let latestStreamSelectionVersion = 0;
-
-const LATEST_SELECTION_TTL_MS = 5 * 60 * 1000;
 
 const DEGRADED_STREAM_POLICY = Object.freeze({
   capacity_busy: {
@@ -294,23 +289,6 @@ function sendJson(req, res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function formatStream(title, url) {
-  return {
-    name: "Jipi",
-    title: title,
-    url: url,
-    behaviorHints: {
-      notWebReady: true
-    }
-  };
-}
-
-function sendErrorStream(req, res, title) {
-  sendJson(req, res, 200, {
-    streams: [formatStream(`⚠️ ${title}`, TEST_VIDEO_URL)]
-  });
-}
-
 function classifyReliabilityCause(errorOrReason) {
   const classification = typeof errorOrReason === "string"
     ? classifyFailure({ reason: errorOrReason })
@@ -348,34 +326,6 @@ async function recordReliabilityOutcome(routeClass, payload = {}) {
   }
 }
 
-function buildDegradedStreamPayload(causeInput) {
-  const cause = classifyReliabilityCause(causeInput);
-  const policy = DEGRADED_STREAM_POLICY[cause] || DEGRADED_STREAM_POLICY.dependency_unavailable;
-
-  if (policy.mode === "empty") {
-    return {
-      streams: [],
-      notice: policy.message
-    };
-  }
-
-  return {
-    streams: [formatStream(`⚠️ ${policy.message}`, TEST_VIDEO_URL)]
-  };
-}
-
-function sendDegradedStream(req, res, causeInput) {
-  const classification = typeof causeInput === "string"
-    ? classifyFailure({ reason: causeInput })
-    : classifyFailure({ error: causeInput });
-  emitTelemetry(EVENTS.REQUEST_DEGRADED, {
-    ...classification,
-    route: req.url || "",
-    method: req.method || "GET"
-  });
-  sendJson(req, res, 200, buildDegradedStreamPayload(causeInput));
-}
-
 const requestControlDependencies = Object.freeze({
   isStremioRoute,
   getTrustedClientIp,
@@ -391,159 +341,37 @@ const requestControlDependencies = Object.freeze({
   rotationIdleMs: ROTATION_IDLE_MS
 });
 
-async function resolveStreamIntent(ip, episodeId) {
-  const activeUrlKey = `active:url:${ip}`;
-  const lastSeenKey = `active:last_seen:${ip}`;
+const streamRouteDependencies = Object.freeze({
+  redisCommand,
+  resolveEpisode: (...args) => addonInterface.resolveEpisode(...args),
+  sendJson,
+  sendDegradedStream,
+  emitTelemetry,
+  classifyFailure,
+  events: EVENTS,
+  degradedPolicy: DEGRADED_STREAM_POLICY,
+  fallbackVideoUrl: TEST_VIDEO_URL
+});
 
-  const existingRaw = await redisCommand(["GET", activeUrlKey]);
-  if (existingRaw) {
-    try {
-      const existing = JSON.parse(existingRaw);
-      if (existing.episodeId === episodeId) {
-        await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
-        return {
-          status: "ok",
-          title: existing.title || "Resolved via Jipi",
-          url: existing.url
-        };
-      }
-    } catch {
-      // Ignore malformed cache payload and re-resolve.
-    }
-  }
-
-  emitTelemetry(EVENTS.DEPENDENCY_ATTEMPT, {
-    source: "broker",
-    cause: "resolve_episode",
-    dependency: "broker",
-    episodeId
-  });
-
-  let resolved;
+async function onStreamError({ error, ip, episodeId }) {
   try {
-    resolved = await addonInterface.resolveEpisode(episodeId);
-  } catch (error) {
-    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
-      ...classifyFailure({ error, source: "broker" }),
-      dependency: "broker",
-      episodeId
-    });
-    throw error;
-  }
-  let finalUrl = resolved.url || "";
-
-  if (finalUrl.startsWith("http://")) {
-    finalUrl = finalUrl.replace("http://", "https://");
+    await redisCommand(["INCR", "stats:broker_error"]);
+  } catch {
+    // Best-effort metric path.
   }
 
-  if (!finalUrl.startsWith("https://")) {
-    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
-      source: "validation",
-      cause: "validation_invalid_stream_url",
-      dependency: "broker",
-      episodeId
-    });
-    return {
-      status: "degraded",
-      cause: "validation_invalid_stream_url"
-    };
-  }
-
-  const payload = {
-    url: finalUrl,
+  const event = {
+    ip,
+    error: error.message,
     episodeId,
-    title: resolved.title,
-    updatedAt: Date.now()
+    time: new Date().toISOString()
   };
-
-  if (!isCurrentEpisodeSelection(ip, episodeId)) {
-    return {
-      status: "stale"
-    };
+  try {
+    await redisCommand(["LPUSH", "quarantine:events", JSON.stringify(event)]);
+    await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
+  } catch {
+    // Best-effort quarantine path.
   }
-
-  await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
-  await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
-
-  return {
-    status: "ok",
-    title: resolved.title || "Resolved via Jipi",
-    url: finalUrl
-  };
-}
-
-function getLatestSelection(clientId) {
-  const latest = latestStreamSelectionByClient.get(clientId);
-  if (!latest) return null;
-
-  if ((Date.now() - latest.updatedAt) > LATEST_SELECTION_TTL_MS) {
-    latestStreamSelectionByClient.delete(clientId);
-    return null;
-  }
-
-  return latest;
-}
-
-function pruneLatestSelections(now = Date.now()) {
-  for (const [clientId, selection] of latestStreamSelectionByClient.entries()) {
-    if ((now - selection.updatedAt) > LATEST_SELECTION_TTL_MS) {
-      latestStreamSelectionByClient.delete(clientId);
-    }
-  }
-}
-
-function isCurrentEpisodeSelection(clientId, episodeId) {
-  const latest = getLatestSelection(clientId);
-  if (!latest) return true;
-  return latest.episodeId === episodeId;
-}
-
-function markLatestSelection(clientId, episodeId) {
-  pruneLatestSelections();
-  latestStreamSelectionVersion += 1;
-  const next = {
-    episodeId,
-    version: latestStreamSelectionVersion,
-    updatedAt: Date.now()
-  };
-  latestStreamSelectionByClient.set(clientId, next);
-  return next;
-}
-
-async function resolveLatestStreamIntent(ip, episodeId) {
-  let currentEpisodeId = episodeId;
-
-  while (true) {
-    const intentKey = `${ip}:${currentEpisodeId}`;
-    const result = await getOrCreateInFlightIntent(intentKey, () => resolveStreamIntent(ip, currentEpisodeId));
-    const latest = getLatestSelection(ip);
-
-    if (result.status === "stale" && latest && latest.episodeId !== currentEpisodeId) {
-      currentEpisodeId = latest.episodeId;
-      continue;
-    }
-
-    if (!latest || latest.episodeId === currentEpisodeId) {
-      return result;
-    }
-
-    currentEpisodeId = latest.episodeId;
-  }
-}
-
-function getOrCreateInFlightIntent(intentKey, producer) {
-  if (inFlightStreamIntents.has(intentKey)) {
-    return inFlightStreamIntents.get(intentKey);
-  }
-
-  const inFlight = Promise.resolve()
-    .then(() => producer())
-    .finally(() => {
-      inFlightStreamIntents.delete(intentKey);
-    });
-
-  inFlightStreamIntents.set(intentKey, inFlight);
-  return inFlight;
 }
 
 function getLandingPageHtml() {
@@ -585,79 +413,6 @@ function getLandingPageHtml() {
 </body>
 </html>
   `.trim();
-}
-
-async function handleStreamRequest(req, res, pathname, ip) {
-  const match = pathname.match(/^\/stream\/([^/]+)\/([^/]+)\.json$/);
-  if (!match || match[1] !== "series") return false;
-  
-  const episodeId = decodeURIComponent(match[2]);
-  
-  // Only handle One Piece
-  if (!episodeId.startsWith("tt0388629")) {
-    return false;
-  }
-
-  markLatestSelection(ip, episodeId);
-
-  try {
-    const result = await resolveLatestStreamIntent(ip, episodeId);
-
-    if (result.status === "degraded") {
-      const degraded = classifyFailure({ reason: result.cause || "dependency_unavailable", source: "broker" });
-      sendDegradedStream(req, res, result.cause);
-      return {
-        handled: true,
-        outcome: {
-          source: degraded.source,
-          cause: degraded.cause,
-          result: "degraded"
-        }
-      };
-    }
-
-    sendJson(req, res, 200, {
-      streams: [formatStream(result.title, result.url)]
-    });
-    return {
-      handled: true,
-      outcome: {
-        source: "broker",
-        cause: "success",
-        result: "success"
-      }
-    };
-  } catch (err) {
-    try {
-      await redisCommand(["INCR", "stats:broker_error"]);
-    } catch {
-      // Best-effort metric path.
-    }
-
-    const event = {
-      ip,
-      error: err.message,
-      episodeId,
-      time: new Date().toISOString()
-    };
-    try {
-      await redisCommand(["LPUSH", "quarantine:events", JSON.stringify(event)]);
-      await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
-    } catch (redisErr) { }
-
-    sendDegradedStream(req, res, err);
-    const degraded = classifyFailure({ error: err, source: "broker" });
-    return {
-      handled: true,
-      outcome: {
-        source: degraded.source,
-        cause: degraded.cause,
-        result: "degraded"
-      }
-    };
-  } finally {
-    pruneLatestSelections();
-  }
 }
 
 async function handleQuarantine(req, res) {
@@ -841,7 +596,7 @@ module.exports = async function (req, res) {
           const deniedCause = classifyReliabilityCause(controlResult.reason || "blocked:slot_taken");
           if (pathname.startsWith("/stream/")) {
             setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "degraded" });
-            sendDegradedStream(req, res, controlResult.reason);
+            sendDegradedStream(req, res, controlResult.reason, streamRouteDependencies);
             return;
           }
           setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "failure" });
@@ -850,7 +605,18 @@ module.exports = async function (req, res) {
         }
 
         if (pathname.startsWith("/stream/")) {
-          const streamResult = await handleStreamRequest(req, res, pathname, controlResult.ip || getTrustedClientIp(req));
+          const streamResult = await applyRoutingStreamRequest(
+            {
+              req,
+              res,
+              pathname,
+              ip: controlResult.ip || getTrustedClientIp(req)
+            },
+            {
+              ...streamRouteDependencies,
+              onStreamError
+            }
+          );
           if (streamResult && streamResult.handled) {
             setReliabilityOutcome(streamResult.outcome || {});
             return;
@@ -860,7 +626,7 @@ module.exports = async function (req, res) {
         const failure = classifyFailure({ error });
         if (pathname.startsWith("/stream/")) {
           setReliabilityOutcome({ source: failure.source, cause: failure.cause, result: "degraded" });
-          sendDegradedStream(req, res, error);
+          sendDegradedStream(req, res, error, streamRouteDependencies);
           return;
         }
         setReliabilityOutcome({ source: failure.source, cause: failure.cause, result: "failure" });
