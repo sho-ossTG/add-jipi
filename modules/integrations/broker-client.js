@@ -1,6 +1,12 @@
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 900;
-const DEFAULT_TOTAL_TIMEOUT_MS = 1800;
-const DEFAULT_RETRY_JITTER_MS = 120;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 1800;
+const DEFAULT_TOTAL_TIMEOUT_MS = 5000;
+const DEFAULT_RETRY_JITTER_MS = 150;
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -128,6 +134,10 @@ function createBrokerClient(options = {}) {
   const baseUrl = String(options.baseUrl || process.env.B_BASE_URL || "");
   const fetchImpl = options.fetchImpl || fetch;
   const boundedDependency = options.executeBoundedDependency || executeBoundedDependency;
+  const env = options.env || process.env;
+  const attemptTimeoutMs = parsePositiveInteger(options.attemptTimeoutMs || env.BROKER_ATTEMPT_TIMEOUT_MS, DEFAULT_ATTEMPT_TIMEOUT_MS);
+  const totalBudgetMs = parsePositiveInteger(options.totalBudgetMs || env.BROKER_TOTAL_TIMEOUT_MS, DEFAULT_TOTAL_TIMEOUT_MS);
+  const jitterMs = parsePositiveInteger(options.jitterMs || env.BROKER_RETRY_JITTER_MS, DEFAULT_RETRY_JITTER_MS);
 
   async function resolveEpisode(episodeId) {
     const id = String(episodeId || "").trim();
@@ -155,6 +165,10 @@ function createBrokerClient(options = {}) {
       }
 
       return nextResponse;
+    }, {
+      attemptTimeoutMs,
+      totalBudgetMs,
+      jitterMs
     });
 
     let data;

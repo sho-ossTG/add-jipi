@@ -271,7 +271,7 @@ test("broker resolve timeout path stays within bounded retry budget", async () =
     const elapsed = Date.now() - startedAt;
 
     assert.equal(calls, 2);
-    assert.ok(elapsed < 2600, `expected timeout budget under 2600ms, got ${elapsed}ms`);
+    assert.ok(elapsed < 6200, `expected timeout budget under 6200ms, got ${elapsed}ms`);
   } finally {
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../addon")];
