@@ -24,7 +24,7 @@ Requirements for initial release hardening. Each maps to roadmap phases.
 
 - [x] **RELY-01**: User stream requests enforce capacity/session policy with atomic Redis-backed gating under concurrency.
 - [x] **RELY-02**: User stream resolution uses bounded dependency calls (timeouts and retry limits) to avoid hung requests.
-- [ ] **RELY-03**: User receives deterministic fallback behavior when broker or Redis dependencies fail.
+- [x] **RELY-03**: User receives deterministic fallback behavior when broker or Redis dependencies fail.
 
 ### Observability
 
@@ -75,7 +75,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SECU-04 | Phase 2 | Complete |
 | RELY-01 | Phase 3 | Complete |
 | RELY-02 | Phase 3 | Complete |
-| RELY-03 | Phase 3 | Pending |
+| RELY-03 | Phase 3 | Complete |
 | OBSV-01 | Phase 4 | Pending |
 | OBSV-02 | Phase 4 | Pending |
 | OBSV-03 | Phase 4 | Pending |
