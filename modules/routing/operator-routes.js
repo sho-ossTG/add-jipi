@@ -1,4 +1,9 @@
 const { authorizeOperator } = require("../policy/operator-auth");
+const {
+  projectHealthDiagnostics,
+  projectMetricsDiagnostics
+} = require("../presentation/operator-diagnostics");
+const { renderQuarantinePage } = require("../presentation/quarantine-page");
 
 function isOperatorRoute(pathname = "") {
   return (
@@ -62,15 +67,13 @@ async function handleOperatorRoute(input = {}, injected = {}) {
       const reliability = typeof readReliabilitySummary === "function"
         ? await readReliabilitySummary(redisCommand)
         : {};
-      const projectOperatorHealth = injected.projectOperatorHealth || ((payload) => payload);
-      sendJson(req, res, 200, projectOperatorHealth({
+      sendJson(req, res, 200, projectHealthDiagnostics({
         redisStatus: "connected",
         reliability
       }));
       return { handled: true, outcome: { source: "redis", cause: "success", result: "success" } };
     } catch {
-      const projectOperatorHealth = injected.projectOperatorHealth || ((payload) => payload);
-      sendJson(req, res, 503, projectOperatorHealth({
+      sendJson(req, res, 503, projectHealthDiagnostics({
         redisStatus: "unavailable",
         reliability: {}
       }));
@@ -87,15 +90,13 @@ async function handleOperatorRoute(input = {}, injected = {}) {
       const reliability = typeof readReliabilitySummary === "function"
         ? await readReliabilitySummary(redisCommand)
         : {};
-      const projectOperatorMetrics = injected.projectOperatorMetrics || ((payload) => payload);
-      sendJson(req, res, 200, projectOperatorMetrics({
+      sendJson(req, res, 200, projectMetricsDiagnostics({
         redisStatus: "connected",
         reliability
       }));
       return { handled: true, outcome: { source: "redis", cause: "success", result: "success" } };
     } catch {
-      const projectOperatorMetrics = injected.projectOperatorMetrics || ((payload) => payload);
-      sendJson(req, res, 503, projectOperatorMetrics({
+      sendJson(req, res, 503, projectMetricsDiagnostics({
         redisStatus: "unavailable",
         reliability: {}
       }));
@@ -105,10 +106,30 @@ async function handleOperatorRoute(input = {}, injected = {}) {
 
   if (pathname === "/quarantine") {
     try {
-      if (typeof injected.handleQuarantine !== "function") {
-        throw new Error("handleOperatorRoute requires injected.handleQuarantine for /quarantine");
+      const redisCommand = injected.redisCommand;
+      if (typeof redisCommand !== "function") {
+        throw new Error("handleOperatorRoute requires injected.redisCommand for /quarantine");
       }
-      await injected.handleQuarantine(req, res);
+
+      const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
+      const slotTaken = await redisCommand(["GET", "stats:slot_taken"]) || 0;
+      const brokerErrors = await redisCommand(["GET", "stats:broker_error"]) || 0;
+      const activeCount = await redisCommand(["ZCARD", "system:active_sessions"]) || 0;
+
+      const html = renderQuarantinePage({
+        eventsRaw,
+        activeCount,
+        slotTaken,
+        brokerErrors,
+        maxSessions: injected.maxSessions
+      });
+
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html");
+      if (typeof injected.applyCors === "function") {
+        injected.applyCors(req, res);
+      }
+      res.end(html);
       return { handled: true, outcome: { source: "redis", cause: "success", result: "success" } };
     } catch {
       sendJson(req, res, 500, { error: "internal_error" });

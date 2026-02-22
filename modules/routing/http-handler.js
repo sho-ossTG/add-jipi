@@ -1,11 +1,14 @@
 const { getRouter } = require("stremio-addon-sdk");
 const proxyaddr = require("proxy-addr");
-const addonInterface = require("../../addon");
 const { createRedisClient } = require("../integrations/redis-client");
 const { applyRequestControls } = require("./request-controls");
 const { handleStreamRequest } = require("./stream-route");
 const { handleOperatorRoute } = require("./operator-routes");
 const { sendDegradedStream } = require("../presentation/stream-payloads");
+const {
+  renderLandingPage,
+  projectPublicHealth
+} = require("../presentation/public-pages");
 const {
   withRequestContext,
   bindResponseCorrelationId,
@@ -21,13 +24,6 @@ const {
   incrementReliabilityCounter,
   readReliabilitySummary
 } = require("../../observability/metrics");
-const {
-  projectOperatorHealth,
-  projectOperatorMetrics
-} = require("../../observability/diagnostics");
-
-const router = getRouter(addonInterface);
-
 const SLOT_TTL = 3600;
 const INACTIVITY_LIMIT = 20 * 60;
 const MAX_SESSIONS = 2;
@@ -271,114 +267,8 @@ function handlePreflight(req, res) {
   return true;
 }
 
-function redactIp(ip) {
-  if (!ip || ip === "unknown") return "unknown";
-  return "[redacted]";
-}
-
-function sanitizeInternalError(errorValue) {
-  if (!errorValue) return "internal_error";
-  return "internal_error";
-}
-
 function sendPublicError(req, res, statusCode = 503) {
   sendJson(req, res, statusCode, { error: "service_unavailable" });
-}
-
-function getLandingPageHtml() {
-  return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>One Piece (Jipi) - Stremio Addon</title>
-    <style>
-        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('https://dl.strem.io/addon-background.jpg') no-repeat center center fixed; background-size: cover; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; }
-        .container { background: rgba(0, 0, 0, 0.8); padding: 3rem; border-radius: 15px; max-width: 500px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); }
-        h1 { margin-top: 0; margin-bottom: 1rem; font-size: 2.5rem; }
-        p { margin-bottom: 2.5rem; opacity: 0.9; font-size: 1.1rem; line-height: 1.6; }
-        .install-btn { display: inline-block; background-color: #8A5BB8; color: white; padding: 1.2rem 2.5rem; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 1.5rem; transition: transform 0.2s, background 0.3s; font-size: 1.2rem; letter-spacing: 1px; }
-        .install-btn:hover { background-color: #7a4ba8; transform: scale(1.05); }
-        .manifest-link { display: block; color: #aaa; text-decoration: none; font-size: 0.9rem; transition: color 0.3s; }
-        .manifest-link:hover { color: #fff; text-decoration: underline; }
-        .nav-links { margin-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; }
-        .nav-links a { color: #8A5BB8; text-decoration: none; margin: 0 10px; font-size: 0.8rem; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>One Piece (Jipi)</h1>
-        <p>Streams resolved via Broker (B) and Worker (C)</p>
-        <a href="stremio://add-jipi.vercel.app/manifest.json" class="install-btn">INSTALL ADDON</a>
-        <a href="https://add-jipi.vercel.app/manifest.json" class="manifest-link">Manual Manifest Link</a>
-        <div class="nav-links">
-            <a href="/health">Health Check</a>
-            <a href="/quarantine">Quarantine Logs</a>
-        </div>
-    </div>
-    <script>
-      window.si = window.si || function(){(window.si.q=window.si.q||[]).push(arguments)};
-    </script>
-    <script defer src="/_vercel/speed-insights/script.js"></script>
-</body>
-</html>
-  `.trim();
-}
-
-async function handleQuarantine(req, res) {
-  const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
-  const slotTaken = await redisCommand(["GET", "stats:slot_taken"]) || 0;
-  const brokerErrors = await redisCommand(["GET", "stats:broker_error"]) || 0;
-  const activeCount = await redisCommand(["ZCARD", "system:active_sessions"]) || 0;
-
-  const events = eventsRaw.map((entry) => {
-    try {
-      const event = JSON.parse(entry);
-      return {
-        time: event.time || "",
-        ip: redactIp(event.ip),
-        episodeId: event.episodeId || "",
-        error: sanitizeInternalError(event.error)
-      };
-    } catch {
-      return { time: "", ip: "unknown", episodeId: "", error: "internal_error" };
-    }
-  });
-
-  const rows = events.map((event) => `
-    <tr>
-      <td style="padding:8px;border-bottom:1px solid #444">${event.time || ""}</td>
-      <td style="padding:8px;border-bottom:1px solid #444">${event.ip || ""}</td>
-      <td style="padding:8px;border-bottom:1px solid #444">${event.episodeId || ""}</td>
-      <td style="padding:8px;border-bottom:1px solid #444;color:#ff6b6b">${event.error || ""}</td>
-    </tr>
-  `).join("");
-
-  const html = `
-    <html>
-      <body style="background:#1a1a1a;color:#eee;font-family:sans-serif;padding:2rem">
-        <h2>Quarantine Events (Last 50)</h2>
-        <p><b>Stats:</b> Active Sessions: ${activeCount}/${MAX_SESSIONS} | Slot Taken Blocks: ${slotTaken} | Broker Errors: ${brokerErrors}</p>
-        <table style="width:100%;border-collapse:collapse;background:#2a2a2a">
-          <thead>
-            <tr style="background:#333">
-              <th style="padding:8px;text-align:left">Time</th>
-              <th style="padding:8px;text-align:left">IP</th>
-              <th style="padding:8px;text-align:left">Episode</th>
-              <th style="padding:8px;text-align:left">Error</th>
-            </tr>
-          </thead>
-          <tbody>${rows || "<tr><td colspan='4' style='padding:20px;text-align:center'>No events</td></tr>"}</tbody>
-        </table>
-        <br><a href="/" style="color:#8A5BB8">Back to Home</a>
-      </body>
-    </html>
-  `;
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "text/html");
-  applyCors(req, res);
-  res.end(html);
 }
 
 function handlePublicRoute(req, res, pathname) {
@@ -387,12 +277,12 @@ function handlePublicRoute(req, res, pathname) {
     res.setHeader("Content-Type", "text/html");
     applyCors(req, res);
     bindResponseCorrelationId(res);
-    res.end(getLandingPageHtml());
+    res.end(renderLandingPage());
     return { handled: true, outcome: { source: "policy", cause: "success", result: "success" } };
   }
 
   if (pathname === "/health") {
-    sendJson(req, res, 200, { status: "OK" });
+    sendJson(req, res, 200, projectPublicHealth());
     return { handled: true, outcome: { source: "policy", cause: "success", result: "success" } };
   }
 
@@ -451,20 +341,29 @@ const requestControlDependencies = Object.freeze({
   rotationIdleMs: ROTATION_IDLE_MS
 });
 
-const streamRouteDependencies = Object.freeze({
-  redisCommand,
-  resolveEpisode: (...args) => addonInterface.resolveEpisode(...args),
-  sendJson,
-  sendDegradedStream,
-  emitTelemetry,
-  classifyFailure,
-  events: EVENTS,
-  degradedPolicy: DEGRADED_STREAM_POLICY,
-  fallbackVideoUrl: TEST_VIDEO_URL
-});
+function getAddonInterface() {
+  return require("../../addon");
+}
+
+function buildStreamRouteDependencies() {
+  return {
+    redisCommand,
+    resolveEpisode: (...args) => getAddonInterface().resolveEpisode(...args),
+    sendJson,
+    sendDegradedStream,
+    emitTelemetry,
+    classifyFailure,
+    events: EVENTS,
+    degradedPolicy: DEGRADED_STREAM_POLICY,
+    fallbackVideoUrl: TEST_VIDEO_URL
+  };
+}
 
 async function createHttpHandler(req, res) {
   return withRequestContext(req, async () => {
+    const runtimeRouter = getRouter(getAddonInterface());
+    const streamRouteDependencies = buildStreamRouteDependencies();
+
     bindResponseCorrelationId(res);
     const startedAt = Date.now();
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -499,9 +398,8 @@ async function createHttpHandler(req, res) {
           sendJson,
           redisCommand,
           readReliabilitySummary,
-          projectOperatorHealth,
-          projectOperatorMetrics,
-          handleQuarantine,
+          applyCors,
+          maxSessions: MAX_SESSIONS,
           expectedToken: process.env.OPERATOR_TOKEN || "",
           emitTelemetry,
           classifyFailure,
@@ -589,7 +487,7 @@ async function createHttpHandler(req, res) {
 
       applyCors(req, res);
       bindResponseCorrelationId(res);
-      router(req, res, () => {
+      runtimeRouter(req, res, () => {
         res.statusCode = 404;
         res.end();
       });
