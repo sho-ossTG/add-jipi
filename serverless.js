@@ -580,6 +580,14 @@ function getLatestSelection(clientId) {
   return latest;
 }
 
+function pruneLatestSelections(now = Date.now()) {
+  for (const [clientId, selection] of latestStreamSelectionByClient.entries()) {
+    if ((now - selection.updatedAt) > LATEST_SELECTION_TTL_MS) {
+      latestStreamSelectionByClient.delete(clientId);
+    }
+  }
+}
+
 function isCurrentEpisodeSelection(clientId, episodeId) {
   const latest = getLatestSelection(clientId);
   if (!latest) return true;
@@ -587,6 +595,7 @@ function isCurrentEpisodeSelection(clientId, episodeId) {
 }
 
 function markLatestSelection(clientId, episodeId) {
+  pruneLatestSelections();
   latestStreamSelectionVersion += 1;
   const next = {
     episodeId,
@@ -754,6 +763,8 @@ async function handleStreamRequest(req, res, pathname, ip) {
 
     sendDegradedStream(req, res, err);
     return true;
+  } finally {
+    pruneLatestSelections();
   }
 }
 
