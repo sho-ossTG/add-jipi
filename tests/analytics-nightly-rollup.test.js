@@ -42,6 +42,18 @@ function createRedisRuntime() {
         return 1;
       }
 
+      if (op === "HSETNX") {
+        const field = String(parts[2] || "");
+        const value = String(parts[3] || "");
+        const hash = hashes.get(key) || new Map();
+        if (hash.has(field)) {
+          return 0;
+        }
+        hash.set(field, value);
+        hashes.set(key, hash);
+        return 1;
+      }
+
       if (op === "HGET") {
         const field = String(parts[2] || "");
         const hash = hashes.get(key) || new Map();
@@ -51,6 +63,19 @@ function createRedisRuntime() {
       if (op === "HGETALL") {
         const hash = hashes.get(key) || new Map();
         return Array.from(hash.entries()).flat();
+      }
+
+      if (op === "HDEL") {
+        const hash = hashes.get(key) || new Map();
+        let removed = 0;
+        for (let index = 2; index < parts.length; index += 1) {
+          const field = String(parts[index] || "");
+          if (hash.delete(field)) {
+            removed += 1;
+          }
+        }
+        hashes.set(key, hash);
+        return removed;
       }
 
       if (op === "HKEYS") {
@@ -79,16 +104,16 @@ function createRedisRuntime() {
 test("nightly rollup aggregates hourly hashes into one daily summary and cleans hourly keys", async () => {
   const redis = createRedisRuntime();
   const day = "2099-01-01";
-  const h14 = "analytics:hourly:2099-01-01-14";
-  const h15 = "analytics:hourly:2099-01-01-15";
+  const hourlyKey = "analytics:hourly";
+  const h14 = "2099-01-01-14";
+  const h15 = "2099-01-01-15";
 
-  await redis.command(["HSET", h14, "requests.total", "10"]);
-  await redis.command(["HSET", h14, "policy.admitted", "8"]);
-  await redis.command(["HSET", h15, "requests.total", "5"]);
-  await redis.command(["HSET", h15, "stream.degraded", "2"]);
-  await redis.command(["PFADD", `${h14}:uniq`, "u1"]);
-  await redis.command(["PFADD", `${h14}:uniq`, "u2"]);
-  await redis.command(["PFADD", `${h15}:uniq`, "u3"]);
+  await redis.command(["HSET", hourlyKey, `${h14}|requests.total|count`, "10"]);
+  await redis.command(["HSET", hourlyKey, `${h14}|policy.admitted|count`, "8"]);
+  await redis.command(["HSET", hourlyKey, `${h15}|requests.total|count`, "5"]);
+  await redis.command(["HSET", hourlyKey, `${h15}|stream.degraded|count`, "2"]);
+  await redis.command(["HSET", hourlyKey, `${h14}|requests.total|first_seen`, "2099-01-01T14:00:00.000Z"]);
+  await redis.command(["HSET", hourlyKey, `${h14}|requests.total|last_seen`, "2099-01-01T14:59:00.000Z"]);
 
   const first = await runNightlyRollup(redis.command, { day });
   assert.equal(first.status, "ok");
@@ -100,8 +125,8 @@ test("nightly rollup aggregates hourly hashes into one daily summary and cleans 
   assert.equal(daily.totalsByField["policy.admitted"], 8);
   assert.equal(daily.totalsByField["stream.degraded"], 2);
 
-  assert.equal((await redis.command(["HGETALL", h14])).length, 0);
-  assert.equal((await redis.command(["HGETALL", h15])).length, 0);
+  const remainingHourly = await redis.command(["HGETALL", hourlyKey]);
+  assert.equal(remainingHourly.length, 0);
 
   const second = await runNightlyRollup(redis.command, { day });
   assert.equal(second.status, "skipped");

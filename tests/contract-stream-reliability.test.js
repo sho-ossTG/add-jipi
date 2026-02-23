@@ -38,7 +38,7 @@ test("atomic gate decisions remain deterministic under concurrent requests", asy
     for (const response of responses) {
       assert.equal(response.statusCode, 200);
       assert.deepEqual(response.body.streams, []);
-      assert.match(response.body.notice, /capacity is currently full/i);
+      assert.equal(response.body.notice, "Temporary load. Try again in a few minutes.");
     }
     assert.equal(runtime.state.sessions.size, 2);
   } finally {
@@ -105,7 +105,7 @@ test("reconnect grace preserves existing session continuity while new contenders
     assert.equal(existingResponse.statusCode, 200);
     assert.match(existingResponse.body.streams[0].url, /^https:\/\//);
     assert.deepEqual(contenderResponse.body.streams, []);
-    assert.match(contenderResponse.body.notice, /capacity is currently full/i);
+    assert.equal(contenderResponse.body.notice, "Temporary load. Try again in a few minutes.");
     assert.ok(runtime.state.sessions.has("198.51.100.11"));
     assert.ok(runtime.state.sessions.has("198.51.100.12"));
     assert.ok(!runtime.state.sessions.has("198.51.100.13"));
@@ -135,6 +135,7 @@ test("duplicate in-flight requests for same client and episode share one resolve
     };
   };
   global.fetch = runtime.fetch;
+  delete require.cache[require.resolve("../modules/routing/http-handler")];
   const handler = loadServerless();
 
   try {
@@ -205,6 +206,93 @@ test("latest request wins during rapid same-client episode switching while dupli
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
     global.fetch = originalFetch;
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../addon")];
+  }
+});
+
+test("per-episode sharing allows owner plus five distinct IPs then soft-denies additional IPs", async () => {
+  const runtime = createRedisRuntime();
+  process.env.MAX_SESSIONS = "20";
+  setRedisEnv();
+
+  const originalFetch = global.fetch;
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  let resolveCount = 0;
+  addon.resolveEpisode = async () => {
+    resolveCount += 1;
+    return {
+      url: "https://cdn.example.com/onepiece-1-20.mp4",
+      title: "One Piece S1E20"
+    };
+  };
+  global.fetch = runtime.fetch;
+  const handler = loadServerless();
+
+  try {
+    const allowedIps = [
+      "198.51.100.101",
+      "198.51.100.102",
+      "198.51.100.103",
+      "198.51.100.104",
+      "198.51.100.105",
+      "198.51.100.106"
+    ];
+
+    for (const ip of allowedIps) {
+      const response = await request(handler, "/stream/series/tt0388629%3A1%3A20.json", { ip });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.body.streams.length, 1);
+      assert.match(response.body.streams[0].url, /onepiece-1-20\.mp4$/);
+    }
+
+    const denied = await request(handler, "/stream/series/tt0388629%3A1%3A20.json", { ip: "198.51.100.107" });
+    assert.equal(denied.statusCode, 200);
+    assert.deepEqual(denied.body.streams, []);
+    assert.equal(denied.body.notice, "Temporary load. Try again in a few minutes.");
+    assert.equal(resolveCount, 1);
+  } finally {
+    delete process.env.MAX_SESSIONS;
+    addon.resolveEpisode = originalResolveEpisode;
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../modules/routing/http-handler")];
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../addon")];
+  }
+});
+
+test("per-episode sharing never reuses links across different episodeIds", async () => {
+  const runtime = createRedisRuntime();
+  process.env.MAX_SESSIONS = "20";
+  setRedisEnv();
+
+  const originalFetch = global.fetch;
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  addon.resolveEpisode = async (episodeId) => {
+    if (episodeId.endsWith(":1:21")) {
+      return { url: "https://cdn.example.com/onepiece-1-21.mp4", title: "One Piece S1E21" };
+    }
+    return { url: "https://cdn.example.com/onepiece-1-22.mp4", title: "One Piece S1E22" };
+  };
+  global.fetch = runtime.fetch;
+  delete require.cache[require.resolve("../modules/routing/http-handler")];
+  const handler = loadServerless();
+
+  try {
+    const episodeA = await request(handler, "/stream/series/tt0388629%3A1%3A21.json", { ip: "198.51.100.111" });
+    const episodeB = await request(handler, "/stream/series/tt0388629%3A1%3A22.json", { ip: "198.51.100.112" });
+
+    assert.equal(episodeA.statusCode, 200);
+    assert.equal(episodeB.statusCode, 200);
+    assert.match(episodeA.body.streams[0].url, /onepiece-1-21\.mp4$/);
+    assert.match(episodeB.body.streams[0].url, /onepiece-1-22\.mp4$/);
+  } finally {
+    delete process.env.MAX_SESSIONS;
+    addon.resolveEpisode = originalResolveEpisode;
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve("../modules/routing/http-handler")];
     delete require.cache[require.resolve("../serverless")];
     delete require.cache[require.resolve("../addon")];
   }

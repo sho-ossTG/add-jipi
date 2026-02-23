@@ -97,6 +97,7 @@ function createMockRedisFetch(mode = "allow") {
 }
 
 function loadServerless() {
+  delete require.cache[require.resolve("../../modules/routing/http-handler")];
   delete require.cache[require.resolve("../../serverless")];
   return require("../../serverless");
 }

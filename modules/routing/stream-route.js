@@ -7,8 +7,47 @@ const latestStreamSelectionByClient = new Map();
 let latestStreamSelectionVersion = 0;
 
 const LATEST_SELECTION_TTL_MS = 5 * 60 * 1000;
-const ACTIVE_URL_TTL = 3600 * 2;
 const INACTIVITY_LIMIT = 20 * 60;
+const EPISODE_SHARE_TTL_SEC = 30 * 60;
+const EPISODE_SHARE_MAX_IPS = 6;
+const EPISODE_SHARE_KEY_PREFIX = "episode:share";
+
+function buildEpisodeShareKey(episodeId) {
+  return `${EPISODE_SHARE_KEY_PREFIX}:${episodeId}`;
+}
+
+function parseEpisodeShare(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAllowedIps(raw = []) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const output = [];
+  for (const entry of raw) {
+    const ip = String(entry || "").trim();
+    if (!ip || seen.has(ip)) continue;
+    seen.add(ip);
+    output.push(ip);
+  }
+  return output.slice(0, EPISODE_SHARE_MAX_IPS);
+}
+
+function remainingShareTtlSec(state = {}, nowMs) {
+  const createdAtMs = Number(state.createdAtMs || 0);
+  if (!Number.isFinite(createdAtMs) || createdAtMs <= 0) {
+    return EPISODE_SHARE_TTL_SEC;
+  }
+  const expiresAtMs = createdAtMs + (EPISODE_SHARE_TTL_SEC * 1000);
+  return Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+}
 
 function getLatestSelection(clientId) {
   const latest = latestStreamSelectionByClient.get(clientId);
@@ -85,8 +124,7 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     throw new Error("handleStreamRequest requires injected.redisCommand");
   }
 
-  const activeUrlKey = `active:url:${ip}`;
-  const lastSeenKey = `active:last_seen:${ip}`;
+  const shareKey = buildEpisodeShareKey(episodeId);
   const redisCommand = injected.redisCommand;
 
   async function writeSessionView(state = {}) {
@@ -108,26 +146,51 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     });
   }
 
-  const existingRaw = await redisCommand(["GET", activeUrlKey]);
-  if (existingRaw) {
-    try {
-      const existing = JSON.parse(existingRaw);
-      if (existing.episodeId === episodeId) {
-        await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
-        await writeSessionView({
-          resolvedUrl: existing.url,
-          title: existing.title || "Resolved via Jipi",
-          status: "cache_hit",
-          reason: "active_cache_hit"
-        });
-        return {
-          status: "ok",
-          title: existing.title || "Resolved via Jipi",
-          url: existing.url
-        };
-      }
-    } catch {
-      // Ignore malformed cache payload and re-resolve.
+  const existingShareRaw = await redisCommand(["GET", shareKey]);
+  const existingShare = parseEpisodeShare(existingShareRaw);
+  if (existingShare && existingShare.episodeId === episodeId && String(existingShare.url || "").startsWith("https://")) {
+    const allowedIps = normalizeAllowedIps(existingShare.allowedIps);
+    if (allowedIps.includes(ip)) {
+      await writeSessionView({
+        resolvedUrl: existingShare.url,
+        title: existingShare.title || "Resolved via Jipi",
+        status: "cache_hit",
+        reason: "episode_share_hit"
+      });
+      return {
+        status: "ok",
+        title: existingShare.title || "Resolved via Jipi",
+        url: existingShare.url
+      };
+    }
+
+    if (allowedIps.length >= EPISODE_SHARE_MAX_IPS) {
+      return {
+        status: "degraded",
+        cause: "blocked:capacity_busy"
+      };
+    }
+
+    const nowMs = Date.now();
+    const ttlSec = remainingShareTtlSec(existingShare, nowMs);
+    if (ttlSec > 0) {
+      const nextShare = {
+        ...existingShare,
+        allowedIps: [...allowedIps, ip],
+        lastSharedAtMs: nowMs
+      };
+      await redisCommand(["SET", shareKey, JSON.stringify(nextShare), "EX", String(ttlSec)]);
+      await writeSessionView({
+        resolvedUrl: nextShare.url,
+        title: nextShare.title || "Resolved via Jipi",
+        status: "cache_hit",
+        reason: "episode_share_join"
+      });
+      return {
+        status: "ok",
+        title: nextShare.title || "Resolved via Jipi",
+        url: nextShare.url
+      };
     }
   }
 
@@ -175,11 +238,15 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     };
   }
 
+  const nowMs = Date.now();
   const payload = {
-    url: finalUrl,
     episodeId,
+    url: finalUrl,
     title: resolved.title,
-    updatedAt: Date.now()
+    ownerIp: ip,
+    allowedIps: [ip],
+    createdAtMs: nowMs,
+    lastSharedAtMs: nowMs
   };
 
   if (!isCurrentEpisodeSelection(ip, episodeId)) {
@@ -188,8 +255,7 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     };
   }
 
-  await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
-  await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
+  await redisCommand(["SET", shareKey, JSON.stringify(payload), "EX", String(EPISODE_SHARE_TTL_SEC)]);
   await writeSessionView({
     resolvedUrl: finalUrl,
     title: resolved.title || "Resolved via Jipi",

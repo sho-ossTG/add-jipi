@@ -107,6 +107,25 @@ function createRedisRuntime(options = {}) {
       result = next;
     }
 
+    if (op === "HSET") {
+      const hash = state.hashes.get(key) || new Map();
+      hash.set(String(command[2] || ""), String(command[3] || ""));
+      state.hashes.set(key, hash);
+      result = 1;
+    }
+
+    if (op === "HSETNX") {
+      const hash = state.hashes.get(key) || new Map();
+      const field = String(command[2] || "");
+      if (hash.has(field)) {
+        result = 0;
+      } else {
+        hash.set(field, String(command[3] || ""));
+        state.hashes.set(key, hash);
+        result = 1;
+      }
+    }
+
     if (op === "HGETALL") {
       const hash = state.hashes.get(key) || new Map();
       result = Array.from(hash.entries()).flat();
@@ -325,6 +344,8 @@ test("operator metrics expose bounded reliability labels and redact sensitive fi
       assert.ok(payload.reliability.boundedDimensions.cause.includes(metric.labels.cause));
       assert.ok(payload.reliability.boundedDimensions.routeClass.includes(metric.labels.routeClass));
       assert.ok(payload.reliability.boundedDimensions.result.includes(metric.labels.result));
+      assert.match(String(metric.firstSeen || ""), /^\d{4}-\d{2}-\d{2}T/);
+      assert.match(String(metric.lastSeen || ""), /^\d{4}-\d{2}-\d{2}T/);
     }
 
     assertSanitizedDiagnosticsPayload(payload);

@@ -126,11 +126,11 @@ test("policy-denied outcomes return deterministic protocol-safe empty responses"
 
     assert.equal(capacityResponse.statusCode, 200);
     assert.deepEqual(capacityResponse.body.streams, []);
-    assert.match(capacityResponse.body.notice, /capacity is currently full/i);
+    assert.equal(capacityResponse.body.notice, "Temporary load. Try again in a few minutes.");
 
     assert.equal(shutdownResponse.statusCode, 200);
     assert.deepEqual(shutdownResponse.body.streams, []);
-    assert.match(shutdownResponse.body.notice, /paused between 00:00 and 08:00/i);
+    assert.equal(shutdownResponse.body.notice, "Temporary load. Try again in a few minutes.");
   } finally {
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../serverless")];

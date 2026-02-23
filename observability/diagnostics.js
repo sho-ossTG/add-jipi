@@ -19,7 +19,9 @@ function sanitizeMetricSeries(metrics = []) {
         routeClass: String(entry && entry.labels && entry.labels.routeClass ? entry.labels.routeClass : "unknown"),
         result: String(entry && entry.labels && entry.labels.result ? entry.labels.result : "failure")
       },
-      count: Math.max(0, Number(entry && entry.count) || 0)
+      count: Math.max(0, Number(entry && entry.count) || 0),
+      firstSeen: typeof (entry && entry.firstSeen) === "string" ? entry.firstSeen : null,
+      lastSeen: typeof (entry && entry.lastSeen) === "string" ? entry.lastSeen : null
     }))
     .filter((entry) => BOUNDED_DIMENSIONS.source.includes(entry.labels.source))
     .filter((entry) => BOUNDED_DIMENSIONS.cause.includes(entry.labels.cause))

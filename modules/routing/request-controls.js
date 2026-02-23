@@ -32,6 +32,18 @@ function resolveRedisEval(injected = {}, redisCommand) {
   };
 }
 
+function previousDay(dateStr = "") {
+  const value = String(dateStr || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
+  const [year, month, day] = value.split("-").map((entry) => Number(entry));
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  utc.setUTCDate(utc.getUTCDate() - 1);
+  const nextYear = String(utc.getUTCFullYear());
+  const nextMonth = String(utc.getUTCMonth() + 1).padStart(2, "0");
+  const nextDay = String(utc.getUTCDate()).padStart(2, "0");
+  return `${nextYear}-${nextMonth}-${nextDay}`;
+}
+
 async function applyRequestControls(input = {}, injected = {}) {
   const req = input.req;
   const pathname = String(input.pathname || "");
@@ -76,7 +88,25 @@ async function applyRequestControls(input = {}, injected = {}) {
     }
   }
 
+  async function runNightlyMaintenance() {
+    if (typeof injected.runNightlyRollup !== "function") {
+      return;
+    }
+
+    const day = previousDay(info && info.dateStr);
+    if (!day) {
+      return;
+    }
+
+    try {
+      await injected.runNightlyRollup(redisCommand, { day });
+    } catch {
+      // Nightly maintenance is best-effort and must not block request flow.
+    }
+  }
+
   if (isWithinShutdownWindow(info, injected.shutdownWindow || {})) {
+    await runNightlyMaintenance();
     if (typeof injected.emitTelemetry === "function") {
       const classifyFailure = injected.classifyFailure || ((value) => ({ source: "policy", cause: value.reason || "blocked:shutdown_window" }));
       injected.emitTelemetry(injected.events && injected.events.POLICY_DECISION, {
@@ -85,11 +115,6 @@ async function applyRequestControls(input = {}, injected = {}) {
         allowed: false
       });
     }
-    await trackPolicyEvent([
-      "requests.total",
-      "policy.blocked",
-      "policy.blocked:shutdown_window"
-    ]);
     return { allowed: false, reason: "blocked:shutdown_window" };
   }
 

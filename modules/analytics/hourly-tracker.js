@@ -12,9 +12,8 @@ function toHourBucket(input = {}) {
   return `${year}-${month}-${day}-${hour}`;
 }
 
-function hourlyKey(bucket, options = {}) {
-  const prefix = String(options.prefix || "analytics:hourly").trim();
-  return `${prefix}:${bucket}`;
+function hourlyKey(_bucket, options = {}) {
+  return String(options.key || "analytics:hourly").trim() || "analytics:hourly";
 }
 
 function normalizeFields(fields = []) {
@@ -32,29 +31,32 @@ async function trackHourlyEvent(redisCommand, input = {}, options = {}) {
 
   const bucket = toHourBucket(input);
   const key = hourlyKey(bucket, options);
-  const ttlSec = Number(options.ttlSec || input.ttlSec || (36 * 3600));
   const fields = normalizeFields(input.fields);
+  const nowIso = new Date(Number(input.nowMs || Date.now())).toISOString();
+
+  if (input.pauseWrites) {
+    return { key, bucket, tracked: 0, paused: true };
+  }
 
   if (!fields.length) {
     return { key, bucket, tracked: 0 };
   }
 
   for (const field of fields) {
-    await redisCommand(["HINCRBY", key, field, "1"]);
-  }
-  await redisCommand(["EXPIRE", key, String(ttlSec)]);
+    const countField = `${bucket}|${field}|count`;
+    const firstSeenField = `${bucket}|${field}|first_seen`;
+    const lastSeenField = `${bucket}|${field}|last_seen`;
 
-  if (input.uniqueId) {
-    const uniqKey = `${key}:uniq`;
-    await redisCommand(["PFADD", uniqKey, String(input.uniqueId)]);
-    await redisCommand(["EXPIRE", uniqKey, String(ttlSec)]);
+    await redisCommand(["HINCRBY", key, countField, "1"]);
+    await redisCommand(["HSETNX", key, firstSeenField, nowIso]);
+    await redisCommand(["HSET", key, lastSeenField, nowIso]);
   }
 
   return {
     key,
     bucket,
     tracked: fields.length,
-    uniqueTracked: Boolean(input.uniqueId)
+    uniqueTracked: false
   };
 }
 

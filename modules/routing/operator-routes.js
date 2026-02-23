@@ -14,6 +14,39 @@ const {
 } = require("../analytics/daily-summary-store");
 const { runNightlyRollup } = require("../analytics/nightly-rollup");
 
+function parseHourlySnapshot(raw = [], bucket = "") {
+  const currentHour = {};
+  if (!Array.isArray(raw)) {
+    return currentHour;
+  }
+
+  for (let index = 0; index < raw.length; index += 2) {
+    const field = String(raw[index] || "");
+    const value = String(raw[index + 1] || "");
+    const parts = field.split("|");
+    if (parts.length !== 3) continue;
+    const [fieldBucket, eventName, metric] = parts;
+    if (fieldBucket !== bucket || !eventName) continue;
+    if (!currentHour[eventName]) {
+      currentHour[eventName] = {
+        count: 0,
+        first_seen: null,
+        last_seen: null
+      };
+    }
+
+    if (metric === "count") {
+      currentHour[eventName].count = Number(value || 0);
+    } else if (metric === "first_seen") {
+      currentHour[eventName].first_seen = value || null;
+    } else if (metric === "last_seen") {
+      currentHour[eventName].last_seen = value || null;
+    }
+  }
+
+  return currentHour;
+}
+
 function isOperatorRoute(pathname = "") {
   return (
     pathname === "/quarantine" ||
@@ -123,16 +156,9 @@ async function handleOperatorRoute(input = {}, injected = {}) {
 
       const nowMs = Date.now();
       const hourBucket = toHourBucket({ nowMs });
-      const hourlyKey = `analytics:hourly:${hourBucket}`;
+      const hourlyKey = "analytics:hourly";
       const hourlyRaw = await redisCommand(["HGETALL", hourlyKey]);
-      const hourlyMap = {};
-      if (Array.isArray(hourlyRaw)) {
-        for (let index = 0; index < hourlyRaw.length; index += 2) {
-          const field = String(hourlyRaw[index] || "");
-          if (!field) continue;
-          hourlyMap[field] = Number(hourlyRaw[index + 1] || 0);
-        }
-      }
+      const hourlyMap = parseHourlySnapshot(hourlyRaw, hourBucket);
 
       const activeSessionViews = await readActiveSessionCount(redisCommand, {
         ttlSec: injected.sessionViewTtlSec

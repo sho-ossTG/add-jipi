@@ -27,6 +27,27 @@ function createRedisMock() {
         return next;
       }
 
+      if (op === "HSETNX") {
+        const field = String(parts[2] || "");
+        const value = String(parts[3] || "");
+        const hash = hashes.get(key) || new Map();
+        if (hash.has(field)) {
+          return 0;
+        }
+        hash.set(field, value);
+        hashes.set(key, hash);
+        return 1;
+      }
+
+      if (op === "HSET") {
+        const field = String(parts[2] || "");
+        const value = String(parts[3] || "");
+        const hash = hashes.get(key) || new Map();
+        hash.set(field, value);
+        hashes.set(key, hash);
+        return 1;
+      }
+
       if (op === "PFADD") {
         const member = String(parts[2] || "");
         const set = hll.get(key) || new Set();
@@ -61,11 +82,10 @@ test("hourly tracker performs fast counter increments and unique tracking", asyn
     uniqueId: "198.51.100.20"
   }, { ttlSec: 600 });
 
-  const hourlyKey = `analytics:hourly:${bucket}`;
+  const hourlyKey = "analytics:hourly";
   const hash = redis.hashes.get(hourlyKey);
-  assert.equal(hash.get("requests.total"), 2);
-  assert.equal(hash.get("policy.admitted"), 2);
-
-  const uniq = redis.hll.get(`${hourlyKey}:uniq`);
-  assert.equal(uniq.size, 1);
+  assert.equal(Number(hash.get(`${bucket}|requests.total|count`)), 2);
+  assert.equal(Number(hash.get(`${bucket}|policy.admitted|count`)), 2);
+  assert.match(String(hash.get(`${bucket}|requests.total|first_seen`)), /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(String(hash.get(`${bucket}|requests.total|last_seen`)), /^\d{4}-\d{2}-\d{2}T/);
 });

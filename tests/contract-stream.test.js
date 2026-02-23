@@ -61,7 +61,7 @@ test("GET stream route blocked by controls returns protocol-safe empty streams",
   assert.equal(response.statusCode, 200);
   assert.ok(Array.isArray(response.body.streams));
   assert.deepEqual(response.body.streams, []);
-  assert.match(response.body.notice, /capacity is currently full/i);
+  assert.equal(response.body.notice, "Temporary load. Try again in a few minutes.");
 });
 
 test("GET unsupported stream id returns empty streams payload", async () => {
@@ -84,5 +84,5 @@ test("manifest and catalog stay available when stream slot gate is blocked", asy
   const streamResponse = await request("/stream/series/tt0388629%3A1%3A1.json", { mode: "slot-blocked" });
   assert.equal(streamResponse.statusCode, 200);
   assert.deepEqual(streamResponse.body.streams, []);
-  assert.match(streamResponse.body.notice, /capacity is currently full/i);
+  assert.equal(streamResponse.body.notice, "Temporary load. Try again in a few minutes.");
 });

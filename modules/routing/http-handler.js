@@ -25,6 +25,7 @@ const {
   readReliabilitySummary
 } = require("../../observability/metrics");
 const { trackHourlyEvent } = require("../analytics/hourly-tracker");
+const { runNightlyRollup } = require("../analytics/nightly-rollup");
 
 function parsePositiveIntEnv(name, fallback) {
   const raw = process.env[name];
@@ -54,11 +55,11 @@ const DEFAULT_CORS_METHODS = "GET,OPTIONS";
 const DEGRADED_STREAM_POLICY = Object.freeze({
   capacity_busy: {
     mode: "empty",
-    message: "Stream capacity is currently full. Please retry in a few minutes."
+    message: "Temporary load. Try again in a few minutes."
   },
   policy_shutdown: {
     mode: "empty",
-    message: "Streaming is paused between 00:00 and 08:00 Jerusalem time. Please retry after 08:00."
+    message: "Temporary load. Try again in a few minutes."
   },
   dependency_timeout: {
     mode: "fallback",
@@ -357,7 +358,8 @@ const requestControlDependencies = Object.freeze({
   reconnectGraceMs: RECONNECT_GRACE_MS,
   rotationIdleMs: ROTATION_IDLE_MS,
   hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC,
-  trackHourlyEvent
+  trackHourlyEvent,
+  runNightlyRollup
 });
 
 function getAddonInterface() {

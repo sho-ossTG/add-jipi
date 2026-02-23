@@ -3,6 +3,7 @@ const KV_SEPARATOR = "=";
 
 const RELIABILITY_HASH_KEY = "stats:reliability:counters";
 const RELIABILITY_LAST_UPDATED_KEY = "stats:reliability:last_updated";
+const RELIABILITY_META_KEY = "stats:reliability:meta";
 
 const BOUNDED_DIMENSIONS = Object.freeze({
   source: ["broker", "redis", "validation", "policy", "unknown"],
@@ -114,17 +115,23 @@ async function incrementReliabilityCounter(redisCommand, labels = {}, amount = 1
   const normalized = normalizeLabels(labels);
   const field = encodeField(normalized);
   const incrementBy = String(Math.max(1, Number(amount) || 1));
+  const nowIso = new Date().toISOString();
 
   await redisCommand(["HINCRBY", RELIABILITY_HASH_KEY, field, incrementBy]);
-  await redisCommand(["SET", RELIABILITY_LAST_UPDATED_KEY, new Date().toISOString(), "EX", "86400"]);
+  await redisCommand(["HSETNX", RELIABILITY_META_KEY, `${field}|first_seen`, nowIso]);
+  await redisCommand(["HSET", RELIABILITY_META_KEY, `${field}|last_seen`, nowIso]);
+  await redisCommand(["SET", RELIABILITY_LAST_UPDATED_KEY, nowIso, "EX", "86400"]);
 
   return normalized;
 }
 
 async function readReliabilitySummary(redisCommand) {
   const hashResponse = await redisCommand(["HGETALL", RELIABILITY_HASH_KEY]);
+  const metaResponse = await redisCommand(["HGETALL", RELIABILITY_META_KEY]);
   const lastUpdated = await redisCommand(["GET", RELIABILITY_LAST_UPDATED_KEY]);
   const entries = parseHashResponse(hashResponse);
+  const metaEntries = parseHashResponse(metaResponse);
+  const metaMap = Object.fromEntries(metaEntries.map(([key, value]) => [String(key || ""), String(value || "")]));
 
   const metrics = [];
   const totals = {
@@ -145,7 +152,12 @@ async function readReliabilitySummary(redisCommand) {
       continue;
     }
 
-    metrics.push({ labels, count });
+    metrics.push({
+      labels,
+      count,
+      firstSeen: metaMap[`${field}|first_seen`] || null,
+      lastSeen: metaMap[`${field}|last_seen`] || null
+    });
 
     totals.overall += count;
     totals[labels.result] += count;
@@ -168,6 +180,7 @@ async function readReliabilitySummary(redisCommand) {
 module.exports = {
   BOUNDED_DIMENSIONS,
   RELIABILITY_HASH_KEY,
+  RELIABILITY_META_KEY,
   incrementReliabilityCounter,
   readReliabilitySummary,
   normalizeLabels
