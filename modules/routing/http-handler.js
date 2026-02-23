@@ -24,14 +24,26 @@ const {
   incrementReliabilityCounter,
   readReliabilitySummary
 } = require("../../observability/metrics");
-const SLOT_TTL = 3600;
-const INACTIVITY_LIMIT = 20 * 60;
-const MAX_SESSIONS = 2;
+
+function parsePositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  const parsed = Number.parseInt(String(raw || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+const SLOT_TTL = parsePositiveIntEnv("SLOT_TTL_SEC", 3600);
+const INACTIVITY_LIMIT = parsePositiveIntEnv("INACTIVITY_LIMIT_SEC", 20 * 60);
+const MAX_SESSIONS = parsePositiveIntEnv("MAX_SESSIONS", 2);
 const DEPENDENCY_ATTEMPT_TIMEOUT_MS = 900;
 const DEPENDENCY_TOTAL_TIMEOUT_MS = 1800;
 const DEPENDENCY_RETRY_JITTER_MS = 120;
-const RECONNECT_GRACE_MS = 15000;
-const ROTATION_IDLE_MS = 45000;
+const RECONNECT_GRACE_MS = parsePositiveIntEnv("RECONNECT_GRACE_MS", 15000);
+const ROTATION_IDLE_MS = parsePositiveIntEnv("ROTATION_IDLE_MS", 45000);
+const SESSION_VIEW_TTL_SEC = parsePositiveIntEnv("SESSION_VIEW_TTL_SEC", 20 * 60);
+const HOURLY_ANALYTICS_TTL_SEC = parsePositiveIntEnv("HOURLY_ANALYTICS_TTL_SEC", 36 * 3600);
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
 const DEFAULT_TRUST_PROXY = "loopback,linklocal,uniquelocal";
@@ -342,7 +354,8 @@ const requestControlDependencies = Object.freeze({
   inactivityLimitSec: INACTIVITY_LIMIT,
   maxSessions: MAX_SESSIONS,
   reconnectGraceMs: RECONNECT_GRACE_MS,
-  rotationIdleMs: ROTATION_IDLE_MS
+  rotationIdleMs: ROTATION_IDLE_MS,
+  hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
 });
 
 function getAddonInterface() {
@@ -359,7 +372,10 @@ function buildStreamRouteDependencies() {
     classifyFailure,
     events: EVENTS,
     degradedPolicy: DEGRADED_STREAM_POLICY,
-    fallbackVideoUrl: TEST_VIDEO_URL
+    fallbackVideoUrl: TEST_VIDEO_URL,
+    sessionViewTtlSec: SESSION_VIEW_TTL_SEC,
+    inactivityLimitSec: INACTIVITY_LIMIT,
+    hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
   };
 }
 
