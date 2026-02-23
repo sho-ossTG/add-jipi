@@ -24,6 +24,7 @@ const {
   incrementReliabilityCounter,
   readReliabilitySummary
 } = require("../../observability/metrics");
+const { trackHourlyEvent } = require("../analytics/hourly-tracker");
 
 function parsePositiveIntEnv(name, fallback) {
   const raw = process.env[name];
@@ -355,7 +356,8 @@ const requestControlDependencies = Object.freeze({
   maxSessions: MAX_SESSIONS,
   reconnectGraceMs: RECONNECT_GRACE_MS,
   rotationIdleMs: ROTATION_IDLE_MS,
-  hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
+  hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC,
+  trackHourlyEvent
 });
 
 function getAddonInterface() {
@@ -375,7 +377,8 @@ function buildStreamRouteDependencies() {
     fallbackVideoUrl: TEST_VIDEO_URL,
     sessionViewTtlSec: SESSION_VIEW_TTL_SEC,
     inactivityLimitSec: INACTIVITY_LIMIT,
-    hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
+    hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC,
+    trackHourlyEvent
   };
 }
 

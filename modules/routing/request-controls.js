@@ -52,6 +52,30 @@ async function applyRequestControls(input = {}, injected = {}) {
       : () => false;
 
   const info = getJerusalemInfo(injected.clock || timeWindow.createJerusalemClock && timeWindow.createJerusalemClock());
+  const redisCommand = resolveRedisCommand(injected);
+  const analyticsBucket = info && info.dateStr && Number.isFinite(info.hour)
+    ? `${info.dateStr}-${String(info.hour).padStart(2, "0")}`
+    : "";
+
+  async function trackPolicyEvent(fields = [], uniqueId = "") {
+    if (typeof injected.trackHourlyEvent !== "function") {
+      return;
+    }
+
+    try {
+      await injected.trackHourlyEvent(redisCommand, {
+        bucket: analyticsBucket,
+        fields,
+        uniqueId,
+        ttlSec: injected.hourlyAnalyticsTtlSec
+      }, {
+        ttlSec: injected.hourlyAnalyticsTtlSec
+      });
+    } catch {
+      // Hourly analytics are best-effort and must not affect requests.
+    }
+  }
+
   if (isWithinShutdownWindow(info, injected.shutdownWindow || {})) {
     if (typeof injected.emitTelemetry === "function") {
       const classifyFailure = injected.classifyFailure || ((value) => ({ source: "policy", cause: value.reason || "blocked:shutdown_window" }));
@@ -61,10 +85,13 @@ async function applyRequestControls(input = {}, injected = {}) {
         allowed: false
       });
     }
+    await trackPolicyEvent([
+      "requests.total",
+      "policy.blocked",
+      "policy.blocked:shutdown_window"
+    ]);
     return { allowed: false, reason: "blocked:shutdown_window" };
   }
-
-  const redisCommand = resolveRedisCommand(injected);
 
   if (info.hour >= 1 && info.dateStr) {
     const resetKey = `system:reset:${info.dateStr}`;
@@ -112,6 +139,12 @@ async function applyRequestControls(input = {}, injected = {}) {
       });
     }
 
+    await trackPolicyEvent([
+      "requests.total",
+      "policy.blocked",
+      `policy.blocked:${String(gateDecision.reason || "blocked:slot_taken").replace(/^blocked:/, "")}`
+    ], ip);
+
     return {
       allowed: false,
       reason: gateDecision.reason || "blocked:slot_taken"
@@ -126,6 +159,11 @@ async function applyRequestControls(input = {}, injected = {}) {
       allowed: true
     });
   }
+
+  await trackPolicyEvent([
+    "requests.total",
+    "policy.admitted"
+  ], ip);
 
   return { allowed: true, ip };
 }

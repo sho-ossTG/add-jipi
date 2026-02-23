@@ -246,6 +246,24 @@ async function handleStreamRequest(input = {}, injected = {}) {
   const formatStream = injected.formatStream || streamPayloads.formatStream;
   const sendDegradedStream = injected.sendDegradedStream || streamPayloads.sendDegradedStream;
 
+  async function trackStreamEvent(fields = []) {
+    if (typeof injected.trackHourlyEvent !== "function") {
+      return;
+    }
+
+    try {
+      await injected.trackHourlyEvent(injected.redisCommand, {
+        fields,
+        uniqueId: ip,
+        ttlSec: injected.hourlyAnalyticsTtlSec
+      }, {
+        ttlSec: injected.hourlyAnalyticsTtlSec
+      });
+    } catch {
+      // Hourly analytics are best-effort and must not affect requests.
+    }
+  }
+
   const requestUserAgent = String(req && req.headers && req.headers["user-agent"] || "");
   const streamInjected = {
     ...injected,
@@ -281,6 +299,11 @@ async function handleStreamRequest(input = {}, injected = {}) {
       }
 
       sendDegradedStream(req, res, result.cause, injected);
+      await trackStreamEvent([
+        "stream.requests",
+        "stream.degraded",
+        `stream.degraded:${String(result.cause || "dependency_unavailable")}`
+      ]);
       return {
         handled: true,
         outcome: {
@@ -298,6 +321,10 @@ async function handleStreamRequest(input = {}, injected = {}) {
     injected.sendJson(req, res, 200, {
       streams: [formatStream(result.title, result.url)]
     });
+    await trackStreamEvent([
+      "stream.requests",
+      "stream.success"
+    ]);
     return {
       handled: true,
       outcome: {
@@ -329,6 +356,11 @@ async function handleStreamRequest(input = {}, injected = {}) {
     }
 
     sendDegradedStream(req, res, error, injected);
+    await trackStreamEvent([
+      "stream.requests",
+      "stream.degraded",
+      `stream.error:${String(error && error.code || "stream_error")}`
+    ]);
     const classifyFailure = injected.classifyFailure || ((value) => ({ source: "broker", cause: value.error ? "dependency_unavailable" : "dependency_unavailable" }));
     const degraded = classifyFailure({ error, source: "broker" });
     return {
