@@ -1,5 +1,6 @@
 const { createBrokerClient } = require("../integrations/broker-client");
 const defaultStreamPayloads = require("../presentation/stream-payloads");
+const { upsertSessionView } = require("../analytics/session-view");
 
 const inFlightStreamIntents = new Map();
 const latestStreamSelectionByClient = new Map();
@@ -88,12 +89,37 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
   const lastSeenKey = `active:last_seen:${ip}`;
   const redisCommand = injected.redisCommand;
 
+  async function writeSessionView(state = {}) {
+    const tracker = typeof injected.trackSessionView === "function" ? injected.trackSessionView : upsertSessionView;
+    const ttlSec = Number(injected.sessionViewTtlSec || injected.inactivityLimitSec || INACTIVITY_LIMIT);
+    await tracker(redisCommand, {
+      ip,
+      userAgent: injected.requestUserAgent,
+      route: injected.requestRoute,
+      episodeId,
+      resolvedUrl: state.resolvedUrl,
+      title: state.title,
+      status: state.status,
+      reason: state.reason,
+      startedAt: injected.requestStartedAt,
+      correlationId: injected.correlationId
+    }, {
+      ttlSec
+    });
+  }
+
   const existingRaw = await redisCommand(["GET", activeUrlKey]);
   if (existingRaw) {
     try {
       const existing = JSON.parse(existingRaw);
       if (existing.episodeId === episodeId) {
         await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
+        await writeSessionView({
+          resolvedUrl: existing.url,
+          title: existing.title || "Resolved via Jipi",
+          status: "cache_hit",
+          reason: "active_cache_hit"
+        });
         return {
           status: "ok",
           title: existing.title || "Resolved via Jipi",
@@ -164,6 +190,12 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
 
   await redisCommand(["SET", activeUrlKey, JSON.stringify(payload), "EX", String(ACTIVE_URL_TTL)]);
   await redisCommand(["SET", lastSeenKey, String(Date.now()), "EX", String(INACTIVITY_LIMIT)]);
+  await writeSessionView({
+    resolvedUrl: finalUrl,
+    title: resolved.title || "Resolved via Jipi",
+    status: "resolved",
+    reason: "resolved_success"
+  });
 
   return {
     status: "ok",
@@ -214,14 +246,40 @@ async function handleStreamRequest(input = {}, injected = {}) {
   const formatStream = injected.formatStream || streamPayloads.formatStream;
   const sendDegradedStream = injected.sendDegradedStream || streamPayloads.sendDegradedStream;
 
+  const requestUserAgent = String(req && req.headers && req.headers["user-agent"] || "");
+  const streamInjected = {
+    ...injected,
+    requestUserAgent,
+    requestRoute: pathname,
+    requestStartedAt: Date.now(),
+    correlationId: req && req.headers && (req.headers["x-correlation-id"] || req.headers["X-Correlation-Id"]) || ""
+  };
+
   markLatestSelection(ip, episodeId);
 
   try {
-    const result = await resolveLatestStreamIntent(ip, episodeId, injected);
+    const result = await resolveLatestStreamIntent(ip, episodeId, streamInjected);
 
     if (result.status === "degraded") {
       const classifyFailure = injected.classifyFailure || ((value) => ({ source: "broker", cause: value.reason || "dependency_unavailable" }));
       const degraded = classifyFailure({ reason: result.cause || "dependency_unavailable", source: "broker" });
+      try {
+        await upsertSessionView(injected.redisCommand, {
+          ip,
+          userAgent: requestUserAgent,
+          route: pathname,
+          episodeId,
+          status: "degraded",
+          reason: result.cause || "dependency_unavailable",
+          startedAt: streamInjected.requestStartedAt,
+          correlationId: streamInjected.correlationId
+        }, {
+          ttlSec: Number(injected.sessionViewTtlSec || injected.inactivityLimitSec || INACTIVITY_LIMIT)
+        });
+      } catch {
+        // Best-effort session snapshot path.
+      }
+
       sendDegradedStream(req, res, result.cause, injected);
       return {
         handled: true,
@@ -251,6 +309,23 @@ async function handleStreamRequest(input = {}, injected = {}) {
   } catch (error) {
     if (typeof injected.onStreamError === "function") {
       await injected.onStreamError({ error, ip, episodeId });
+    }
+
+    try {
+      await upsertSessionView(injected.redisCommand, {
+        ip,
+        userAgent: requestUserAgent,
+        route: pathname,
+        episodeId,
+        status: "error",
+        reason: String(error && error.code || "stream_error"),
+        startedAt: streamInjected.requestStartedAt,
+        correlationId: streamInjected.correlationId
+      }, {
+        ttlSec: Number(injected.sessionViewTtlSec || injected.inactivityLimitSec || INACTIVITY_LIMIT)
+      });
+    } catch {
+      // Best-effort session snapshot path.
     }
 
     sendDegradedStream(req, res, error, injected);
