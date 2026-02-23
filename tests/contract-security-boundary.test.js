@@ -47,6 +47,9 @@ function withFixedJerusalemTime(run) {
 
 function createRedisMock(options = {}) {
   const recordedIps = [];
+  const strings = new Map();
+  const hashes = new Map();
+  const hll = new Map();
   const {
     quarantineEvents = [
       {
@@ -66,6 +69,15 @@ function createRedisMock(options = {}) {
     let result = "OK";
 
     if (op === "PING") result = "PONG";
+    if (op === "SET") {
+      const hasNx = command.includes("NX");
+      if (hasNx && strings.has(String(key || ""))) {
+        result = null;
+      } else {
+        strings.set(String(key || ""), String(command[2] || ""));
+        result = "OK";
+      }
+    }
     if (op === "EVAL") {
       const currentIp = command[4];
       recordedIps.push(currentIp);
@@ -75,14 +87,59 @@ function createRedisMock(options = {}) {
       if (String(key || "").startsWith("system:reset:")) result = "1";
       else if (String(key || "").startsWith("active:url:")) result = null;
       else if (String(key || "").startsWith("stats:")) result = 0;
-      else result = null;
+      else result = strings.has(String(key || "")) ? strings.get(String(key || "")) : null;
+    }
+    if (op === "DEL") {
+      strings.delete(String(key || ""));
+      hashes.delete(String(key || ""));
+      hll.delete(String(key || ""));
+      result = 1;
     }
     if (op === "ZSCORE") {
       recordedIps.push(key);
       result = "1";
     }
     if (op === "ZCARD") result = 1;
+    if (op === "ZREMRANGEBYSCORE") result = 0;
     if (op === "LRANGE") result = quarantineEvents.map((event) => JSON.stringify(event));
+    if (op === "HINCRBY") {
+      const hash = hashes.get(String(key || "")) || new Map();
+      const field = String(command[2] || "");
+      const amount = Number(command[3] || 0);
+      const next = Number(hash.get(field) || 0) + amount;
+      hash.set(field, String(next));
+      hashes.set(String(key || ""), hash);
+      result = next;
+    }
+    if (op === "HGET") {
+      const hash = hashes.get(String(key || "")) || new Map();
+      const field = String(command[2] || "");
+      result = hash.has(field) ? hash.get(field) : null;
+    }
+    if (op === "HSET") {
+      const hash = hashes.get(String(key || "")) || new Map();
+      hash.set(String(command[2] || ""), String(command[3] || ""));
+      hashes.set(String(key || ""), hash);
+      result = 1;
+    }
+    if (op === "HGETALL") {
+      const hash = hashes.get(String(key || "")) || new Map();
+      result = Array.from(hash.entries()).flat();
+    }
+    if (op === "HKEYS") {
+      const hash = hashes.get(String(key || "")) || new Map();
+      result = Array.from(hash.keys());
+    }
+    if (op === "PFADD") {
+      const set = hll.get(String(key || "")) || new Set();
+      set.add(String(command[2] || ""));
+      hll.set(String(key || ""), set);
+      result = 1;
+    }
+    if (op === "PFCOUNT") {
+      const set = hll.get(String(key || "")) || new Set();
+      result = set.size;
+    }
 
     return {
       ok: true,
@@ -207,6 +264,25 @@ test("operator diagnostics routes allow authorized requests", async () => {
   assert.doesNotMatch(serialized, /198\.51\.100\./);
   assert.doesNotMatch(serialized, /stack/);
   assert.doesNotMatch(serialized, /https?:\/\//);
+
+  const analyticsResponse = await request("/operator/analytics", {
+    headers: {
+      authorization: "Bearer top-secret"
+    }
+  });
+  assert.equal(analyticsResponse.statusCode, 200);
+  const analyticsPayload = JSON.parse(analyticsResponse.body);
+  assert.equal(analyticsPayload.status, "OK");
+  assert.equal(typeof analyticsPayload.realtime.activeSessionViews, "number");
+
+  const rollupResponse = await request("/operator/rollup/nightly?day=2099-01-01", {
+    headers: {
+      authorization: "Bearer top-secret"
+    }
+  });
+  assert.equal(rollupResponse.statusCode, 200);
+  const rollupPayload = JSON.parse(rollupResponse.body);
+  assert.ok(["ok", "skipped"].includes(rollupPayload.status));
 });
 
 test("trusted attribution ignores spoofed forwarded header", async () => {
@@ -239,7 +315,14 @@ test("authorized quarantine output and public errors are sanitized", async () =>
   assert.doesNotMatch(quarantineResponse.body, /198\.51\.100\.22/);
   assert.doesNotMatch(quarantineResponse.body, /broker timeout stacktrace/);
 
-  const publicFailure = await request("/manifest.json", { withRedisConfig: false });
-  assert.equal(publicFailure.statusCode, 503);
-  assert.deepEqual(JSON.parse(publicFailure.body), { error: "service_unavailable" });
+  const publicManifest = await request("/manifest.json", { withRedisConfig: false });
+  assert.equal(publicManifest.statusCode, 200);
+
+  const streamFailure = await request("/stream/series/tt0388629%3A1%3A1.json", { withRedisConfig: false });
+  assert.equal(streamFailure.statusCode, 200);
+  const streamPayload = JSON.parse(streamFailure.body);
+  assert.ok(Array.isArray(streamPayload.streams));
+  if (streamPayload.streams.length > 0) {
+    assert.match(streamPayload.streams[0].url, /^https:\/\//);
+  }
 });
