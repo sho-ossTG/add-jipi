@@ -1,14 +1,11 @@
 {
   "version": 2,
   "functions": {
-    "serverless.js": {
+    "api/index.js": {
       "maxDuration": 60
     }
   },
-  "builds": [
-    { "src": "serverless.js", "use": "@vercel/node" }
-  ],
   "routes": [
-    { "src": "/(.*)", "dest": "serverless.js" }
+    { "src": "/(.*)", "dest": "/api/index.js" }
   ]
 }
