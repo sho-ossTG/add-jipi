@@ -11,7 +11,8 @@ Users can reliably request a supported episode and immediately receive a valid p
 ## Current State
 
 - Shipped milestone: v1.0 MVP Hardening (2026-02-22)
-- Delivery status: 6 phases complete, 18 plans complete, 16 of 16 v1 requirements shipped
+- Shipped milestone: v1.0.1 Trial Analytics Patch (2026-02-23)
+- Delivery status: 7 phases complete, 25 plans complete, 17 of 17 v1.0.1 patch requirements shipped
 - Validation status: milestone audit showed full requirements/phase/integration coverage with only low-severity manual environment checks deferred
 - Integration/network verification status: deferred for protected/authenticated endpoints and live dependency checks; execute documented runbooks on a network-enabled tester machine
 
@@ -19,13 +20,14 @@ Users can reliably request a supported episode and immediately receive a valid p
 
 - Execute deferred live-environment verification runbooks and attach evidence artifacts.
 - Define v1.1 requirements and roadmap scope from operational feedback.
-- Prioritize operational maturity requirements (`OPER-01`, `OPER-02`) versus product expansion (`PROD-01`, `PROD-02`).
+- Decide whether v1.1 focuses on operational maturity, product expansion, or mixed scope.
 
 ## Requirements
 
 ### Validated
 
 - v1.0 requirements archive: `.planning/milestones/v1.0-REQUIREMENTS.md`
+- v1.0.1 requirements archive: `.planning/milestones/v1.0.1-REQUIREMENTS.md`
 
 ### Active
 
@@ -59,4 +61,4 @@ The current codebase is a modularized JavaScript/CommonJS serverless addon using
 | Keep live-network checks as explicit manual runbooks under offline constraints | Preserve operational verification quality without violating local execution limits | Good |
 
 ---
-*Last updated: 2026-02-22 after v1.0 milestone completion*
+*Last updated: 2026-02-23 after v1.0.1 milestone completion*

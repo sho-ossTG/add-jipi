@@ -1,5 +1,30 @@
 # Project Milestones: add-jipi
 
+## v1.0.1 Trial Analytics Patch (Shipped: 2026-02-23)
+
+**Delivered:** Stream-path analytics/session controls with deterministic nightly rollup and secured operator visibility, without changing stream-only gating behavior.
+
+**Phases completed:** 7-7 (7 plans total)
+
+**Key accomplishments:**
+- Added temporary session snapshots with TTL-backed active-session indexing for operator diagnostics.
+- Added ultra-light hourly analytics tracking (`HINCRBY`/`EXPIRE` + optional `PFADD`) on policy and stream outcomes.
+- Added permanent single-key daily summary storage and lock-protected idempotent nightly rollup with hourly cleanup.
+- Added operator endpoints for analytics visibility and manual nightly rollup trigger.
+- Added patch-focused tests plus updated security-boundary contracts while keeping required/optional gates green.
+
+**Stats:**
+- 12 files changed
+- 998 insertions, 14 deletions
+- 1 phase, 7 plans, 22 tasks
+- 1 day from patch start to ship
+
+**Git range:** `d709cd3` -> `826afe3`
+
+**What's next:** Start v1.1 milestone scoping with fresh requirements via `/gsd-new-milestone`.
+
+---
+
 ## v1.0 MVP Hardening (Shipped: 2026-02-22)
 
 **Delivered:** Contract-safe, security-hardened, reliability-bounded, observable, modularized addon runtime with audit debt captured and resolved for shipment readiness.

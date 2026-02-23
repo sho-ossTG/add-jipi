@@ -2,7 +2,7 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-22)
+See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Users can reliably request a supported episode and immediately receive a valid playable stream.
 **Current focus:** Planning next milestone
@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 Phase: Next milestone (not planned)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-02-22 - v1.0 milestone archived and tagged
+Last activity: 2026-02-23 - v1.0.1 milestone archived and tagged
 
 Progress: ---------- 0%
 
@@ -23,6 +23,12 @@ Progress: ---------- 0%
 - Plans completed: 18
 - Tasks completed: 41
 - Execution window: 2026-02-21 to 2026-02-22
+
+**Latest shipped milestone (v1.0.1):**
+- Phases completed: 1
+- Plans completed: 7
+- Tasks completed: 22
+- Execution window: 2026-02-23 to 2026-02-23
 
 ## Accumulated Context
 
@@ -45,6 +51,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-22 21:51
-Stopped at: Session resumed via resume-project workflow; ready to route next command
+Last session: 2026-02-23 13:45
+Stopped at: v1.0.1 milestone archived/tagged; ready for next milestone planning
 Resume file: .planning/MILESTONES.md
