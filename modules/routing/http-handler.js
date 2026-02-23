@@ -423,6 +423,7 @@ async function createHttpHandler(req, res) {
           readReliabilitySummary,
           applyCors,
           maxSessions: MAX_SESSIONS,
+          sessionViewTtlSec: SESSION_VIEW_TTL_SEC,
           expectedToken: process.env.OPERATOR_TOKEN || "",
           emitTelemetry,
           classifyFailure,

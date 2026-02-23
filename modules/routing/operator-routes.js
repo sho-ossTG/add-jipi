@@ -4,11 +4,22 @@ const {
   projectMetricsDiagnostics
 } = require("../presentation/operator-diagnostics");
 const { renderQuarantinePage } = require("../presentation/quarantine-page");
+const { toHourBucket } = require("../analytics/hourly-tracker");
+const {
+  readActiveSessionCount
+} = require("../analytics/session-view");
+const {
+  listDailySummaryDays,
+  readDailySummary
+} = require("../analytics/daily-summary-store");
+const { runNightlyRollup } = require("../analytics/nightly-rollup");
 
 function isOperatorRoute(pathname = "") {
   return (
     pathname === "/quarantine" ||
     pathname === "/health/details" ||
+    pathname === "/operator/analytics" ||
+    pathname.startsWith("/operator/rollup/") ||
     pathname.startsWith("/operator/") ||
     pathname.startsWith("/admin/")
   );
@@ -101,6 +112,76 @@ async function handleOperatorRoute(input = {}, injected = {}) {
         reliability: {}
       }));
       return { handled: true, outcome: { source: "redis", cause: "dependency_unavailable", result: "failure" } };
+    }
+  }
+
+  if (pathname === "/operator/analytics") {
+    try {
+      if (typeof redisCommand !== "function") {
+        throw new Error("handleOperatorRoute requires injected.redisCommand for /operator/analytics");
+      }
+
+      const nowMs = Date.now();
+      const hourBucket = toHourBucket({ nowMs });
+      const hourlyKey = `analytics:hourly:${hourBucket}`;
+      const hourlyRaw = await redisCommand(["HGETALL", hourlyKey]);
+      const hourlyMap = {};
+      if (Array.isArray(hourlyRaw)) {
+        for (let index = 0; index < hourlyRaw.length; index += 2) {
+          const field = String(hourlyRaw[index] || "");
+          if (!field) continue;
+          hourlyMap[field] = Number(hourlyRaw[index + 1] || 0);
+        }
+      }
+
+      const activeSessionViews = await readActiveSessionCount(redisCommand, {
+        ttlSec: injected.sessionViewTtlSec
+      });
+      const dailyDays = await listDailySummaryDays(redisCommand);
+      const latestDay = dailyDays.length ? dailyDays[dailyDays.length - 1] : null;
+      const latestSummary = latestDay ? await readDailySummary(redisCommand, latestDay) : null;
+
+      sendJson(req, res, 200, {
+        status: "OK",
+        generatedAt: new Date().toISOString(),
+        realtime: {
+          activeSessionViews,
+          currentHourKey: hourlyKey,
+          currentHour: hourlyMap
+        },
+        dailySummary: {
+          daysTracked: dailyDays.length,
+          latestDay,
+          latest: latestSummary
+        }
+      });
+
+      return { handled: true, outcome: { source: "redis", cause: "success", result: "success" } };
+    } catch {
+      sendJson(req, res, 500, { error: "internal_error" });
+      return { handled: true, outcome: { source: "redis", cause: "internal_error", result: "failure" } };
+    }
+  }
+
+  if (pathname === "/operator/rollup/nightly") {
+    try {
+      if (typeof redisCommand !== "function") {
+        throw new Error("handleOperatorRoute requires injected.redisCommand for /operator/rollup/nightly");
+      }
+
+      const reqUrl = new URL(req.url || "/operator/rollup/nightly", "http://localhost");
+      const day = String(reqUrl.searchParams.get("day") || "").trim();
+      const now = new Date();
+      const defaultDay = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+      const result = await runNightlyRollup(redisCommand, {
+        day: day || defaultDay,
+        force: reqUrl.searchParams.get("force") === "1"
+      });
+      sendJson(req, res, 200, result);
+      return { handled: true, outcome: { source: "redis", cause: "success", result: "success" } };
+    } catch {
+      sendJson(req, res, 500, { error: "internal_error" });
+      return { handled: true, outcome: { source: "redis", cause: "internal_error", result: "failure" } };
     }
   }
 
