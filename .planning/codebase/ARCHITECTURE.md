@@ -1,130 +1,187 @@
 # Architecture
 
-**Analysis Date:** 2026-02-21
+**Analysis Date:** 2026-02-25
 
 ## Pattern Overview
 
-**Overall:** Single-function serverless adapter around a Stremio addon interface
+**Overall:** Modular serverless adapter with 6 explicit boundary layers around a Stremio addon interface
 
 **Key Characteristics:**
-- Route-first orchestration lives in one Node entry file at `serverless.js`.
-- Addon domain behavior (catalog + stream resolution) is encapsulated in `addon.js` and consumed by `serverless.js`.
-- External state and rate controls are delegated to Redis REST calls in `serverless.js` via `redisCommand()`.
+- `serverless.js` is a thin Vercel adapter — it imports `createHttpHandler` from `modules/routing/http-handler.js` and exports it.
+- All routing, policy enforcement, integrations, analytics, and presentation live under `modules/` with strict import-direction rules documented in `modules/BOUNDARIES.md`.
+- Cross-cutting concerns (logging, metrics, correlation IDs) are centralized in `observability/`.
+- Redis is the only shared state store; process memory holds only in-flight deduplication maps.
 
 ## Layers
 
-**HTTP Entry/Transport Layer:**
-- Purpose: Accept all incoming HTTP requests, route special endpoints, and delegate Stremio protocol routes.
-- Location: `serverless.js`
-- Contains: `module.exports = async function (req, res)`, route checks for `/`, `/health`, `/quarantine`, `/stream/*`, and fallback router call.
-- Depends on: `stremio-addon-sdk` router (`getRouter`), addon interface from `./addon`, Redis helper utilities.
-- Used by: Vercel runtime configured in `vercel.json`.
+**HTTP Entry / Transport Layer:**
+- Purpose: Compose the request lifecycle — CORS, route dispatch, telemetry, reliability counters.
+- Location: `modules/routing/http-handler.js`
+- Contains: `createHttpHandler`, `applyCors`, `handlePreflight`, `executeBoundedDependency`, `recordReliabilityOutcome`, `buildStreamRouteDependencies`.
+- Depends on: All other `modules/` boundaries and `observability/`.
+- Used by: `serverless.js` (Vercel runtime entry).
 
-**Addon Interface Layer:**
-- Purpose: Define Stremio manifest, catalog response, and stream resolution behavior.
-- Location: `addon.js`
-- Contains: `manifest`, `builder.defineCatalogHandler(...)`, `builder.defineStreamHandler(...)`, `resolveEpisode(...)`.
-- Depends on: `stremio-addon-sdk` (`addonBuilder`), broker endpoint via `B_BASE_URL` env var.
-- Used by: `serverless.js` through `require("./addon")` and `addonInterface.resolveEpisode(...)`.
+**Policy Layer:**
+- Purpose: Deterministic rule evaluation — time windows, session admission, operator authentication.
+- Location: `modules/policy/`
+- Contains:
+  - `session-gate.js` — Lua script (`SESSION_GATE_SCRIPT`) atomically manages `system:active_sessions` ZSET (admit existing, admit new, rotate idle, or block).
+  - `time-window.js` — Jerusalem-timezone shutdown window logic.
+  - `operator-auth.js` — Bearer token validation for operator routes.
+- No direct Redis client; receives `redisEval` / `redisCommand` as injected dependencies.
 
-**Control/Policy Layer:**
-- Purpose: Enforce access windows, session concurrency, and request admission before stream delivery.
-- Location: `serverless.js`
-- Contains: `applyRequestControls(req, pathname)`, IP extraction, Jerusalem-time checks, ZSET session tracking.
-- Depends on: Redis command wrapper and constants (`INACTIVITY_LIMIT`, `MAX_SESSIONS`, `SLOT_TTL`).
-- Used by: Main request handler before stream routing.
+**Integration Layer:**
+- Purpose: External dependency clients — Redis REST and broker HTTP.
+- Location: `modules/integrations/`
+- Contains:
+  - `redis-client.js` — Upstash REST transport wrapper.
+  - `broker-client.js` — Broker `/api/resolve` HTTP client with `executeBoundedDependency` retry.
+- No presentation or routing imports.
 
-**Integration/State Layer:**
-- Purpose: Persist and query distributed state and event counters.
-- Location: `serverless.js`
-- Contains: `getRedisConfig()`, `redisCommand(command)`, Redis key patterns (`system:*`, `active:*`, `stats:*`, `quarantine:*`).
-- Depends on: Upstash/Vercel KV REST env vars (`KV_REST_API_URL`, `KV_REST_API_TOKEN`, fallback Upstash names).
-- Used by: Control layer, stream caching path, health endpoint, and quarantine dashboard.
+**Analytics Layer:**
+- Purpose: Event counting, session view tracking, nightly rollup.
+- Location: `modules/analytics/`
+- Contains:
+  - `hourly-tracker.js` — Increments hourly analytics hash fields (`analytics:hourly`).
+  - `session-view.js` — Writes per-session episode view snapshots to Redis sorted set.
+  - `nightly-rollup.js` — Aggregates prior-day hourly fields into `daily:summary` hash with distributed lock.
+  - `daily-summary-store.js` — HSET writer for daily summary records.
 
-**Presentation Layer (Operational UI):**
-- Purpose: Render landing page and quarantine diagnostics HTML.
-- Location: `serverless.js`
-- Contains: `getLandingPageHtml()`, `handleQuarantine(res)` HTML string builders.
-- Depends on: Current Redis metrics and event log list.
-- Used by: `/` and `/quarantine` endpoints.
+**Presentation Layer:**
+- Purpose: Response shaping and HTML rendering.
+- Location: `modules/presentation/`
+- Contains:
+  - `stream-payloads.js` — `formatStream`, `sendDegradedStream`.
+  - `quarantine-page.js` — Operator diagnostic HTML table (IPs redacted, errors sanitized).
+  - `public-pages.js` — Landing page HTML, `/health` JSON projection.
+  - `operator-diagnostics.js` — Detailed diagnostics for `/health/details`.
+- No service client imports.
+
+**Observability Layer:**
+- Purpose: Structured logging, event classification, metrics, correlation IDs.
+- Location: `observability/`
+- Contains:
+  - `context.js` — `withRequestContext` / `getCorrelationId` via AsyncLocalStorage.
+  - `events.js` — `EVENTS` enum, `classifyFailure`, `emitEvent` (pino sink).
+  - `logger.js` — Pino factory with component tagging.
+  - `metrics.js` — `incrementReliabilityCounter` / `readReliabilitySummary` (Redis hash `stats:reliability:counters`).
+  - `diagnostics.js` — Operator diagnostics aggregation.
+
+**Routing Orchestration:**
+- Location: `modules/routing/`
+- Contains:
+  - `http-handler.js` — Top-level request lifecycle composition.
+  - `stream-route.js` — Episode share cache check, broker resolution, `handleStreamRequest`.
+  - `request-controls.js` — Shutdown-window check, daily reset, atomic session gate, analytics.
+  - `operator-routes.js` — `/quarantine`, `/health/details`, `/operator/*` dispatch.
 
 ## Data Flow
 
-**Stream Request Flow (`/stream/series/:id.json`):**
+**Stream Request Flow (`/stream/series/:episodeId.json`):**
 
-1. Request enters `module.exports` in `serverless.js` and passes through `applyRequestControls()`.
-2. `handleStreamRequest()` checks Redis cache (`active:url:${ip}`) for same episode reuse.
-3. Cache miss triggers `addonInterface.resolveEpisode(episodeId)` from `addon.js`, which calls broker `/api/resolve` via `callBrokerResolve()`.
-4. URL is normalized/validated to HTTPS, cached in Redis, and returned as Stremio stream JSON (`sendJson` + `formatStream`).
+1. Vercel → `serverless.js` → `createHttpHandler` in `modules/routing/http-handler.js`.
+2. `withRequestContext` binds a correlation ID via AsyncLocalStorage.
+3. CORS preflight handled; operator route checked (auth-gated); public route (`/`, `/health`) checked.
+4. `applyRequestControls` runs:
+   - Jerusalem time-window check via `modules/policy/time-window.js`.
+   - Nightly rollup triggered for previous day if inside shutdown window.
+   - Lua atomic session gate (`runAtomicSessionGate`) via `modules/policy/session-gate.js`.
+   - If blocked → `sendDegradedStream` with policy cause.
+5. `handleStreamRequest` in `modules/routing/stream-route.js`:
+   - Reads episode share cache (`GET episode:share:{episodeId}`).
+   - Cache hit (IP already allowed): returns cached URL immediately.
+   - Cache hit (new IP, slot available): adds IP to share, writes back with remaining TTL.
+   - Cache miss: calls `resolveEpisode` → `addon.js` → broker `/api/resolve` (via `executeBoundedDependency`).
+   - Validates URL (HTTPS-only); writes new share entry (`SET episode:share:{id} ... EX 1800`).
+6. `upsertSessionView` writes per-session episode view to `sessions:view:active` ZSET.
+7. `trackHourlyEvent` increments hourly analytics hash fields.
+8. `recordReliabilityOutcome` writes bounded-dimension counter to `stats:reliability:counters`.
+9. Response: `{ streams: [{ url, title, name }] }`.
 
-**Catalog/Manifest Flow:**
+**Policy-Blocked Flow:**
+- Time window block → `sendDegradedStream` with `policy_shutdown` cause.
+- Slot taken → `sendDegradedStream` with `capacity_busy` cause.
+- Degraded stream: either empty `{ streams: [] }` or fallback test video, based on `DEGRADED_STREAM_POLICY`.
 
-1. Non-intercepted Stremio routes are delegated to `router(req, res, ...)` in `serverless.js`.
-2. Router calls handlers defined in `addon.js` (`defineCatalogHandler`, `defineStreamHandler`) based on resource path.
-3. Handler returns manifest/catalog/stream payload in Stremio format.
+**Catalog / Manifest Flow:**
+1. Non-intercepted Stremio routes fall through to `runtimeRouter` (stremio-addon-sdk).
+2. SDK router invokes handlers defined in `addon.js` (`defineCatalogHandler`, `defineStreamHandler`).
 
-**Operational Endpoint Flow:**
-
-1. `/health` pings Redis (`redisCommand(["PING"])`) and returns JSON status.
-2. `/quarantine` reads Redis lists/counters and renders HTML table.
-3. `/` returns static landing page HTML.
-
-**State Management:**
-- Use Redis as the single shared state store; keep process memory stateless.
-- Store session/activity in ZSET/string keys (`system:active_sessions`, `active:last_seen:*`, `active:url:*`) with TTLs.
-- Treat addon metadata as code-defined constants in `addon.js` (`manifest`, `IMDB_ID`).
+**Operational Endpoints:**
+- `/health` — Redis PING, JSON status (public, no auth).
+- `/health/details` — Reliability summary from Redis hash (operator-auth required).
+- `/quarantine` — Last 50 error events from Redis list (operator-auth required).
+- `/operator/reliability` — Reliability counters via `readReliabilitySummary`.
 
 ## Key Abstractions
 
-**Stremio Addon Interface:**
-- Purpose: Standard contract for manifest/catalog/stream behavior.
-- Examples: `addon.js` (`builder.getInterface()`, handlers at lines defining catalog and stream behavior).
-- Pattern: Build once with `addonBuilder`, export interface object, enrich with helper (`resolveEpisode`) for internal reuse.
+**`executeBoundedDependency`:**
+- Purpose: 2-attempt retry with per-attempt timeout and jitter within a total budget.
+- Location: `modules/routing/http-handler.js:94` (for Redis), `modules/integrations/broker-client.js:27` (for broker).
+- Pattern: `operation({ timeout })` → catches transient errors → sleeps jitter → retries once.
 
-**Redis REST Command Wrapper:**
-- Purpose: Centralize Redis authentication, transport, and response validation.
-- Examples: `serverless.js` (`getRedisConfig`, `redisCommand`).
-- Pattern: Send single-command pipeline request; throw typed errors (`err.code`) on config/http/response failures.
+**Atomic Session Gate (Lua):**
+- Purpose: Admit, rotate, or block clients in a single atomic Redis operation.
+- Location: `modules/policy/session-gate.js` — `SESSION_GATE_SCRIPT` (63 lines of Lua).
+- Returns: `[allowed, reason, rotatedIp, activeCount]`.
+- Outcomes: `admitted:existing`, `admitted:new`, `admitted:rotated`, `blocked:slot_taken`.
 
-**Route Interception Gate:**
-- Purpose: Intercept selected routes (`/stream/*`) for custom policy and caching while delegating remaining Stremio protocol routes.
-- Examples: `serverless.js` (`if (pathname.startsWith("/stream/"))` blocks + final `router(req, res, ...)`).
-- Pattern: Handle custom cases first, then call SDK router as fallback.
+**Episode Share Cache:**
+- Purpose: Allow up to 6 IPs to reuse one resolved stream URL per episode for 30 minutes.
+- Key: `episode:share:{episodeId}` (Redis string, JSON payload).
+- Fields: `episodeId`, `url`, `ownerIp`, `allowedIps[]`, `createdAtMs`, `lastSharedAtMs`.
+- Location: `modules/routing/stream-route.js`.
+
+**`classifyFailure` / `emitEvent`:**
+- Purpose: Normalize any error or reason string to `{ source, cause }` and emit structured pino log entry.
+- Location: `observability/events.js`.
+- Used by all boundary layers to produce consistent telemetry.
+
+**`withRequestContext` / `getCorrelationId`:**
+- Purpose: AsyncLocalStorage-scoped correlation ID thread-local storage.
+- Location: `observability/context.js`.
+- Automatically included in all `emitEvent` payloads.
 
 ## Entry Points
 
-**Serverless Function Entry Point:**
+**Vercel Serverless Entry:**
 - Location: `serverless.js`
-- Triggers: Any HTTP path matched by `vercel.json` route `/(.*)`.
-- Responsibilities: Route dispatch, request control, stream interception, health/quarantine UI, SDK router fallback.
+- Triggers: All HTTP paths matched by `vercel.json` catch-all route.
+- Responsibilities: Import and re-export `createHttpHandler`.
 
-**Local Runtime Entry Point:**
-- Location: `package.json` (`scripts.start`)
-- Triggers: `npm start`
-- Responsibilities: Run Node process with `serverless.js` for local/dev execution.
+**Stremio Addon Interface:**
+- Location: `addon.js`
+- Triggers: SDK router from within `createHttpHandler`.
+- Responsibilities: Manifest definition, catalog/stream handlers, `resolveEpisode` helper.
+
+**Local Start:**
+- Location: `package.json` (`scripts.start` → `node serverless.js`)
 
 ## Error Handling
 
-**Strategy:** Fail-safe responses with degraded but valid payloads instead of unhandled exceptions
+**Strategy:** Fail-safe degraded responses — never unhandled rejections in production paths.
 
 **Patterns:**
-- Wrap stream resolution in `try/catch` and return empty streams or test-video error stream (`sendErrorStream`) on failure.
-- Convert infra errors to API-safe payloads in endpoints (`/health`, main handler) via `sendJson` with 500/503 codes.
-- Validate critical upstream contracts early (`B_BASE_URL`, broker JSON body, `data.url` presence, Redis response shape).
+- Route handlers return `{ handled, outcome: { source, cause, result } }`.
+- Best-effort paths (analytics, quarantine events, reliability counters) always guarded with `catch { // comment }`.
+- `DEGRADED_STREAM_POLICY` maps each cause to a `mode` (`empty` or `fallback`) and user-facing message.
+- `sendDegradedStream` in `modules/presentation/stream-payloads.js` selects the appropriate degraded response.
 
 ## Cross-Cutting Concerns
 
-**Logging:**
-- Use Redis-backed event capture (`quarantine:events`) rather than stdout logs in `serverless.js`.
+**Logging:** All output via `emitEvent(logger, EVENTS.*, payload)` → pino JSON. Sensitive values (raw IPs, tokens) not included in log payloads.
 
-**Validation:**
-- Validate route shape and episode constraints (`tt0388629` prefix) in `handleStreamRequest()`.
-- Validate environment config for Redis and broker before external calls.
+**Validation:** Episode ID validated against `tt0388629` prefix. Broker URLs validated as HTTPS. Redis response shapes validated before use. Env config validated eagerly at startup.
 
-**Authentication:**
-- No end-user auth layer is implemented.
-- Infrastructure auth uses bearer token for Redis REST in `redisCommand()`.
+**Authentication:** Operator routes require `X-Operator-Token` header matching `OPERATOR_TOKEN` env var. If env var unset → 503 `operator_auth_unconfigured` (no bypass).
+
+**Import Directions (from `modules/BOUNDARIES.md`):**
+- `routing` → `policy`, `integrations`, `analytics`, `presentation`, `observability`
+- `policy` → pure utilities only (no service clients)
+- `integrations` → transport utilities only
+- `presentation` → no service client imports
+- `analytics` → receives `redisCommand` as injected dependency
 
 ---
 
-*Architecture analysis: 2026-02-21*
+*Architecture analysis: 2026-02-25*

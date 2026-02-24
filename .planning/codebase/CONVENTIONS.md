@@ -1,85 +1,168 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-02-21
+**Analysis Date:** 2026-02-25
 
 ## Naming Patterns
 
 **Files:**
-- Use lowercase file names with no separators for top-level modules in this repo, following `addon.js` and `serverless.js`.
+- `kebab-case.js` for all module files under `modules/` and `observability/` (e.g., `broker-client.js`, `session-gate.js`, `hourly-tracker.js`).
+- Lowercase root-level files with role-oriented names: `addon.js`, `serverless.js`.
 
 **Functions:**
-- Use `camelCase` for function names, including helpers and handlers, as in `cleanTitle` in `addon.js` and `applyRequestControls` in `serverless.js`.
+- `camelCase` throughout.
+- Factory functions: `create` prefix (e.g., `createRedisClient`, `createBrokerClient`, `createHttpHandler`).
+- Boolean predicates: `is` prefix (e.g., `isStremioRoute`, `isWithinShutdownWindow`, `isCurrentEpisodeSelection`, `isTransientDependencyFailure`).
+- Route handlers: `handle` prefix (e.g., `handleStreamRequest`, `handleOperatorRoute`, `handlePreflight`).
+- Projectors: `project` prefix (e.g., `projectPublicHealth`).
+- Renderers: `render` prefix (e.g., `renderLandingPage`, `renderQuarantinePage`).
 
 **Variables:**
-- Use `UPPER_SNAKE_CASE` for module-level constants such as `B_BASE_URL` in `addon.js` and `INACTIVITY_LIMIT` in `serverless.js`.
-- Use `camelCase` for local variables and parameters such as `episodeId`, `controlResult`, and `activeUrlKey` in `serverless.js`.
+- `UPPER_SNAKE_CASE` for module-level constants (e.g., `EPISODE_SHARE_TTL_SEC`, `MAX_SESSIONS`, `DEFAULT_TRUST_PROXY`, `SESSION_GATE_SCRIPT`).
+- `camelCase` for local variables and parameters (e.g., `episodeId`, `controlResult`, `shareKey`).
 
 **Types:**
-- Not applicable: the codebase is JavaScript CommonJS and does not define TypeScript types or interfaces (`package.json`, `addon.js`, `serverless.js`).
+- Not applicable: CommonJS JavaScript, no TypeScript interfaces or JSDoc type annotations.
 
 ## Code Style
 
 **Formatting:**
-- Tool used: Not detected (no `.prettierrc*`, `biome.json`, or formatter config found in repo root).
-- Use 2-space indentation, double quotes, trailing semicolons, and explicit object key/value formatting consistent with `addon.js` and `serverless.js`.
+- 2-space indentation, double quotes, trailing semicolons.
+- No formatter config detected (no `.prettierrc*`, `biome.json`, or `eslint.config.*`). Style enforced by code review.
 
 **Linting:**
-- Tool used: Not detected (no `.eslintrc*` or `eslint.config.*` found).
-- Apply existing style consistency manually when editing `addon.js` and `serverless.js`.
+- No linting tooling detected. Consistency maintained manually.
 
 ## Import Organization
 
 **Order:**
-1. External dependencies first, via `require(...)` (for example `stremio-addon-sdk` in `addon.js` and `serverless.js`).
-2. Local module imports second (for example `require("./addon")` in `serverless.js`).
-3. Local constants and function declarations after imports in the same module (`addon.js`, `serverless.js`).
+1. External npm dependencies (e.g., `stremio-addon-sdk`, `proxy-addr`, `pino`).
+2. `observability/` imports.
+3. Local `modules/` imports, grouped by boundary layer.
 
 **Path Aliases:**
-- None detected; use relative imports only (for example `./addon` in `serverless.js`).
+- None; relative paths only (e.g., `../../observability/events`, `../integrations/redis-client`).
+
+**Module Manifest:**
+- `modules/index.js` is a maintainer-facing manifest listing module entrypoints. It is **never imported at runtime**. Runtime code imports concrete files directly (e.g., `modules/routing/http-handler.js`).
+
+## Dependency Injection (DI) Pattern
+
+All significant functions use the signature `(input = {}, injected = {})`:
+
+```js
+async function handleStreamRequest(input = {}, injected = {}) {
+  const formatStream = injected.formatStream || defaultStreamPayloads.formatStream;
+  const sendDegradedStream = injected.sendDegradedStream || streamPayloads.sendDegradedStream;
+  // ...
+}
+```
+
+- `input` — the data payload for this invocation (request, pathname, IP, etc.).
+- `injected` — overridable dependencies; resolve to production defaults when not provided.
+- This pattern enables full test injection without module mocking.
+
+## Handler Return Shape
+
+All route handlers return a consistent `{ handled, outcome }` shape:
+
+```js
+// Route matched and handled:
+return {
+  handled: true,
+  outcome: { source: "broker", cause: "success", result: "success" }
+};
+
+// Route not matched (fall through):
+return { handled: false };
+```
+
+`outcome.result` is one of: `"success"`, `"degraded"`, `"failure"`.
 
 ## Error Handling
 
-**Patterns:**
-- Validate required environment configuration early and throw `Error` with clear messages, as in `callBrokerResolve` (`addon.js`) and `redisCommand` (`serverless.js`).
-- Attach machine-readable codes on infrastructure errors where needed, as done with `err.code` values in `redisCommand` in `serverless.js`.
-- Wrap boundary handlers in `try/catch` and return safe fallback payloads (`{ streams: [] }` in `addon.js`, JSON/API fallback responses in `serverless.js`).
-- Use targeted recovery for non-critical parsing/cache failures, with guarded `JSON.parse` blocks in `handleStreamRequest` and `handleQuarantine` in `serverless.js`.
+**Infrastructure errors:**
+- Attach `.code` (machine-readable string) and `.statusCode` (HTTP integer) before throwing.
+```js
+const err = new Error("Broker request failed");
+err.code = "broker_http_error";
+err.statusCode = response.status;
+throw err;
+```
+
+**Transient vs. fatal:**
+- `isTransientDependencyFailure(error)` classifies retryable errors (408, 429, 5xx, ETIMEDOUT, ECONNRESET, ECANCELED, AbortError).
+- `executeBoundedDependency` handles one retry within a total budget.
+
+**Best-effort paths:**
+- Any `catch` block that intentionally swallows errors must include a comment explaining why:
+```js
+} catch {
+  // Best-effort metric path.
+}
+
+} catch {
+  // Hourly analytics are best-effort and must not affect requests.
+}
+```
+
+**Error classification:**
+- `classifyFailure({ error, source, reason })` in `observability/events.js` normalizes any error to `{ source, cause }`.
+- Used by all boundary layers before emitting telemetry.
 
 ## Logging
 
-**Framework:** None detected (no `console.*`, logger package, or telemetry SDK usage in `addon.js` and `serverless.js`).
+**Framework:** Pino, via `observability/logger.js` (`getLogger({ component })`).
 
-**Patterns:**
-- Prefer structured error responses and Redis event recording over console logging, as shown by quarantine event writes in `handleStreamRequest` in `serverless.js`.
+**Pattern:**
+- All structured log output flows through `emitEvent(logger, eventName, payload)` in `observability/events.js`.
+- Never call `logger.info` or `console.log` directly — use `emitTelemetry` or `emitEvent`.
+- Event names come from the `EVENTS` enum: `request.start`, `policy.decision`, `dependency.attempt`, `dependency.failure`, `request.degraded`, `request.complete`.
+- Sensitive headers (tokens, raw IPs in log payloads) are not included — IPs are redacted in output layers.
+- Correlation ID automatically attached to every event via `getCorrelationId()` (AsyncLocalStorage).
 
 ## Comments
 
-**When to Comment:**
-- Use short section comments for operational phases and invariants, matching existing comments such as `// 1. Blocked Hours` and `// Enforce HTTPS` in `serverless.js`.
+**When to comment:**
+- Named operational phases in a handler (e.g., `// 1. Time Window Check`, `// Enforce HTTPS`).
+- Best-effort catch blocks (required — see Error Handling above).
+- Non-obvious invariants or workarounds.
+
+**When not to comment:**
+- Self-descriptive function calls or standard patterns.
 
 **JSDoc/TSDoc:**
-- Not used in current modules (`addon.js`, `serverless.js`). Keep function names and parameter names self-descriptive.
+- Not used anywhere in the codebase. Keep function names and parameter names self-descriptive.
 
 ## Function Design
 
 **Size:**
-- Keep shared utility functions focused (`cleanTitle`, `formatStream`, `sendJson`) and isolate orchestration in explicit handlers (`handleStreamRequest`, exported request handler) across `addon.js` and `serverless.js`.
+- Keep each function focused on one responsibility.
+- Orchestration functions (like `handleStreamRequest`, `applyRequestControls`) delegate to focused sub-functions.
 
 **Parameters:**
-- Pass primitive values and request objects directly; avoid implicit globals except environment and module constants (`addon.js`, `serverless.js`).
+- Pass primitives and plain objects directly.
+- No implicit globals except module-level constants and the two module-level Maps in `stream-route.js` (in-flight deduplication).
 
 **Return Values:**
-- Return explicit JSON-serializable objects for handlers and helpers (for example `{ url, filename, title, episodeId }` in `addon.js`, `{ allowed, reason }` and stream payloads in `serverless.js`).
+- Return explicit JSON-serializable objects.
+- Use `{ handled, outcome }` for route handlers (see Handler Return Shape above).
+- Use `{ allowed, reason, ... }` for policy decisions.
+- Use `{ status, url, title }` or `{ status, cause }` for stream resolution results.
 
 ## Module Design
 
 **Exports:**
-- Use `module.exports` as the module boundary (`addon.js`, `serverless.js`).
-- Expose additional testing/integration hook methods by attaching properties to exported interfaces when needed (`addonInterface.resolveEpisode` in `addon.js`).
+- Named exports only: `module.exports = { fn1, fn2 }`.
+- Do not attach properties to exported interfaces after the fact.
 
-**Barrel Files:**
-- Not used; imports are direct per-module (`serverless.js` importing `./addon`).
+**Import Direction:**
+- Follow `modules/BOUNDARIES.md` strictly:
+  - `routing` → `policy`, `integrations`, `analytics`, `presentation`, `observability`.
+  - `policy` → pure utilities only (no service clients).
+  - `integrations` → transport utilities only.
+  - `presentation` → no service client imports.
+  - Never: `integrations` → `presentation`, `policy` → `routing`, `presentation` → `integrations`.
 
 ---
 
-*Convention analysis: 2026-02-21*
+*Convention analysis: 2026-02-25*

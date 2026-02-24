@@ -1,84 +1,167 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-02-21
+**Analysis Date:** 2026-02-25
 
 ## Directory Layout
 
 ```text
 add-jipi/
-├── .planning/               # Planning artifacts for GSD workflows
-│   └── codebase/            # Generated codebase mapping documents
-├── addon.js                 # Stremio addon manifest and handlers
-├── serverless.js            # HTTP entry point and runtime orchestration
-├── package.json             # Node package metadata and scripts
-├── vercel.json              # Vercel build and route mapping
-└── .gitignore               # Ignored local/generated paths
+├── .planning/
+│   └── codebase/              # Generated codebase mapping documents
+├── modules/
+│   ├── analytics/             # Event counting, session views, nightly rollup
+│   │   ├── daily-summary-store.js
+│   │   ├── hourly-tracker.js
+│   │   ├── nightly-rollup.js
+│   │   └── session-view.js
+│   ├── integrations/          # External dependency clients
+│   │   ├── broker-client.js
+│   │   └── redis-client.js
+│   ├── policy/                # Business rule evaluation
+│   │   ├── operator-auth.js
+│   │   ├── session-gate.js
+│   │   └── time-window.js
+│   ├── presentation/          # Response shaping and HTML rendering
+│   │   ├── operator-diagnostics.js
+│   │   ├── public-pages.js
+│   │   ├── quarantine-page.js
+│   │   └── stream-payloads.js
+│   ├── routing/               # HTTP request lifecycle orchestration
+│   │   ├── http-handler.js
+│   │   ├── operator-routes.js
+│   │   ├── request-controls.js
+│   │   └── stream-route.js
+│   ├── BOUNDARIES.md          # Import direction rules and ownership contracts
+│   └── index.js               # Maintainer manifest — NOT a runtime import
+├── observability/
+│   ├── context.js             # Correlation ID via AsyncLocalStorage
+│   ├── diagnostics.js         # Operator diagnostics aggregation
+│   ├── events.js              # EVENTS enum, classifyFailure, emitEvent
+│   ├── logger.js              # Pino logger factory with component tagging
+│   ├── metrics.js             # Reliability counters (Redis hash read/write)
+│   └── TEST-GATES.md          # Test gate membership documentation
+├── tests/
+│   ├── helpers/
+│   │   └── runtime-fixtures.js        # Mock Redis and runtime factories
+│   ├── analytics-hourly.test.js
+│   ├── analytics-nightly-rollup.test.js
+│   ├── contract-observability.test.js
+│   ├── contract-security-boundary.test.js
+│   ├── contract-stream-failures.test.js
+│   ├── contract-stream-reliability.test.js
+│   ├── contract-stream.test.js
+│   ├── request-controls-nightly.test.js
+│   └── session-view-ttl.test.js
+├── addon.js                   # Stremio manifest, catalog/stream handlers, resolveEpisode
+├── package.json               # Scripts, dependencies, test runner (node --test)
+├── package-lock.json          # Dependency lockfile
+├── serverless.js              # Vercel entry: re-exports createHttpHandler
+└── vercel.json                # Vercel build config (builds-only, maxDuration: 60)
 ```
 
 ## Directory Purposes
 
-**`.planning/`:**
-- Purpose: Persist generated planning and mapping documentation.
-- Contains: Markdown docs under `codebase/`.
-- Key files: `.planning/codebase/ARCHITECTURE.md`, `.planning/codebase/STRUCTURE.md`.
+**`modules/`:**
+- Purpose: All application logic organized by bounded responsibility.
+- Subdirectories: `routing`, `policy`, `integrations`, `analytics`, `presentation`.
+- Key files: `BOUNDARIES.md` (import rules), `index.js` (maintainer manifest only — never imported).
 
-**Project root (`add-jipi/`):**
-- Purpose: Flat runtime code and deployment config for a single serverless addon.
-- Contains: Executable JavaScript entry files and JSON config.
-- Key files: `serverless.js`, `addon.js`, `package.json`, `vercel.json`.
+**`modules/routing/`:**
+- Purpose: HTTP request lifecycle — route classification, CORS, session gating, stream resolution.
+- Key file: `http-handler.js` (entry for all requests).
+
+**`modules/policy/`:**
+- Purpose: Deterministic business rules with no external I/O of their own.
+- Key file: `session-gate.js` (Lua atomic ZSET gate).
+
+**`modules/integrations/`:**
+- Purpose: Encapsulate all external transport — Redis REST and broker HTTP.
+- Key files: `redis-client.js`, `broker-client.js`.
+
+**`modules/analytics/`:**
+- Purpose: Track request events and aggregate into daily summaries.
+- Key files: `hourly-tracker.js`, `nightly-rollup.js`.
+
+**`modules/presentation/`:**
+- Purpose: Format responses — Stremio stream payloads, HTML pages, diagnostics.
+- Key file: `stream-payloads.js` (`formatStream`, `sendDegradedStream`).
+
+**`observability/`:**
+- Purpose: Cross-cutting concerns — structured logging (pino), metrics, correlation IDs.
+- Key files: `events.js` (all telemetry flows through here), `metrics.js` (reliability counters), `context.js` (correlation ID).
+
+**`tests/`:**
+- Purpose: Contract tests and integration tests using Node's built-in `node:test` runner.
+- Key file: `tests/helpers/runtime-fixtures.js` (mock Redis, mock broker, shared test factories).
 
 ## Key File Locations
 
 **Entry Points:**
-- `serverless.js`: Main exported request handler used by deployment routing.
-- `package.json`: Local start command entry (`node serverless.js`).
+- `serverless.js` — Vercel runtime entry; thin re-export of `createHttpHandler`.
+- `addon.js` — Stremio addon interface; also exposes `resolveEpisode` for routing layer.
+- `package.json` — Local start: `node serverless.js`.
 
 **Configuration:**
-- `package.json`: Runtime type, scripts, and dependency declarations.
-- `vercel.json`: Build target (`@vercel/node`) and catch-all route forwarding to `serverless.js`.
-- `.gitignore`: Excluded runtime artifacts and dependencies.
+- `vercel.json` — Build target (`@vercel/node`), catch-all route, `maxDuration: 60`.
+- `package.json` — Test scripts, runtime type (`commonjs`), dependency declarations.
 
 **Core Logic:**
-- `addon.js`: Stremio manifest, catalog handler, stream resolver, broker client helper.
-- `serverless.js`: Routing, request controls, Redis access, stream cache, quarantine/health pages.
+- `modules/routing/http-handler.js` — Top-level request handler, composes all boundaries.
+- `modules/routing/stream-route.js` — Episode share cache and broker resolution.
+- `modules/routing/request-controls.js` — Shutdown window + session gate.
+- `modules/policy/session-gate.js` — Lua atomic session admission script.
+- `modules/integrations/broker-client.js` — Broker HTTP client with retry.
+- `observability/events.js` — `classifyFailure`, `emitEvent`, `EVENTS` enum.
 
-**Testing:**
-- Not detected (no `*.test.*`, `*.spec.*`, or test configuration files in repository root).
+**Boundary Rules:**
+- `modules/BOUNDARIES.md` — Enforced by code review; static lint is deferred to a future phase.
 
 ## Naming Conventions
 
 **Files:**
-- Use lowercase root-level JavaScript filenames with role-oriented names: `addon.js`, `serverless.js`.
-- Use lowercase JSON config names tied to platform/tooling: `package.json`, `vercel.json`.
+- `kebab-case.js` throughout `modules/` and `observability/`.
+- Root-level files use lowercase role names: `addon.js`, `serverless.js`.
+- Config files match platform/tooling convention: `package.json`, `vercel.json`.
 
 **Directories:**
-- Use dot-prefixed directories for tooling/meta assets: `.planning`.
-- Keep operational code flat at repository root (no `src/` split currently).
+- Lowercase singular names matching responsibility: `routing`, `policy`, `integrations`, `analytics`, `presentation`.
+- Dot-prefixed for tooling/meta: `.planning`.
 
 ## Where to Add New Code
 
-**New Feature:**
-- Primary code: Add Stremio protocol behavior in `addon.js`; add HTTP/runtime orchestration in `serverless.js`.
-- Tests: Create a new `tests/` directory at repo root (for example `tests/addon.test.js`) because no test structure exists yet.
+**New route or endpoint:**
+- Add route handler in `modules/routing/` (e.g., `modules/routing/new-route.js`).
+- Wire from `http-handler.js`.
+- Add presentation rendering in `modules/presentation/` if HTML/JSON formatting is needed.
 
-**New Component/Module:**
-- Implementation: Add new root-level module files (for example `redis-client.js`, `request-controls.js`) and import from `serverless.js`.
+**New external dependency:**
+- Add client in `modules/integrations/` (e.g., `modules/integrations/new-service.js`).
+- Inject via `injected` pattern; do not import directly from `routing` or `presentation`.
 
-**Utilities:**
-- Shared helpers: Extract reusable functions from `serverless.js` or `addon.js` into dedicated root modules and keep names aligned to responsibility.
+**New business rule:**
+- Add to `modules/policy/` if the rule is deterministic and stateless (or uses injected Redis).
+- Keep pure functions separate from I/O.
+
+**New analytics event:**
+- Use `trackHourlyEvent(redisCommand, { bucket, fields, uniqueId }, options)` from `modules/analytics/hourly-tracker.js`.
+- Field names follow `event.subtype` convention (e.g., `stream.success`, `policy.blocked`).
+
+**New test:**
+- Place in `tests/` with `.test.js` suffix.
+- Use factories from `tests/helpers/runtime-fixtures.js`.
+- Add to `package.json` test scripts and `observability/TEST-GATES.md`.
 
 ## Special Directories
 
 **`.planning/codebase/`:**
-- Purpose: Stores generated architecture/quality/stack concern documents.
-- Generated: Yes
-- Committed: Yes
+- Purpose: Generated architecture and quality reference documents.
+- Generated: Yes — by `gsd-codebase-mapper` agents.
+- Committed: Yes.
 
-**`.git/`:**
-- Purpose: Git metadata and object database.
-- Generated: Yes
-- Committed: No
+**`modules/BOUNDARIES.md`:**
+- Purpose: Documents allowed and forbidden import directions between module boundaries.
+- Enforced: By code review (no static lint yet).
 
 ---
 
-*Structure analysis: 2026-02-21*
+*Structure analysis: 2026-02-25*
