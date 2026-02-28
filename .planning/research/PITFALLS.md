@@ -1,253 +1,190 @@
-# Pitfalls Research
+# Pitfalls Research — Server A → D Integration
 
-**Domain:** Stremio stream-resolution addon backend (Node.js serverless) with Redis REST state and external broker dependency
-**Researched:** 2026-02-21
-**Confidence:** HIGH
+**Codebase:** Server A (Stremio addon, Node.js CommonJS, Vercel serverless)
+**Integration target:** Server D (not yet built)
+**Researched:** 2026-02-28
+
+---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Treating fallback streams as successful resolution
+### C1: D Unreachable Silently Promotes to Success
 
 **What goes wrong:**
-The service returns protocol-safe fallback responses (empty/test stream) when broker or Redis calls fail, and the team interprets this as reliability instead of degraded correctness.
-
-**Why it happens:**
-Client compatibility pressure is high in addon backends, so teams optimize for "never break Stremio contract" and skip explicit failure classification.
-
-**How to avoid:**
-Define failure classes (`broker_timeout`, `broker_bad_payload`, `redis_unavailable`, `policy_block`) and always emit structured logs/metrics with correlation IDs, while still returning client-safe responses.
+If the D client's error handling isn't wired correctly into `executeBoundedDependency`, a failed D call could resolve to `undefined` rather than throwing. `stream-route.js` lines 122+ expect either a valid `{ url, title }` or a thrown error. If null resolves, `url` is undefined, HTTPS validation passes vacuously, and either a broken payload reaches Stremio or the process throws uncaught.
 
 **Warning signs:**
-Healthy-looking stream response rates with rising user complaints, growing `broker_error` counters without alerting, and incident reviews that cannot identify whether broker or Redis caused failures.
+- Stremio receives empty `streams: []` with no degraded notice
+- `stream.degraded` hourly counter doesn't increment despite D being down
+- No `quarantine:events` entries even though D is unreachable
 
-**Phase to address:**
-Phase 2 - Stream-path reliability and dependency controls; Phase 3 - Observability and diagnostics
+**Prevention:**
+D client must throw on every non-success path — no silent null returns. Mirror the existing broker client: throw with structured error code (`code: "dependency_timeout"`, `code: "dependency_unavailable"`) so `classifyFailure` in `observability/events.js` maps it correctly. Validate that `degradedPolicy` in `http-handler.js` has an entry for the D client source label.
+
+**Phase:** D client interface definition — first thing that must be correct.
 
 ---
 
-### Pitfall 2: Non-atomic Redis REST session gating
+### C2: Contract Drift — A Assumes `{ url, title }`, D Ships Something Else
 
 **What goes wrong:**
-Session-slot checks and updates are done as separate Redis REST calls, enabling race conditions, slot leakage, or false rejections under concurrent load.
-
-**Why it happens:**
-REST-based Redis wrappers make each command feel simple, but distributed coordination requires atomicity and careful expiry semantics.
-
-**How to avoid:**
-Move slot allocation/release to Lua or transactional pipeline semantics, enforce idempotent keys per request/session, and test concurrency with burst scenarios before rollout.
+After migration, A uses `response.title` from D directly. If D's actual response is `{ streamUrl, episodeTitle }` or nested, the title field will be `undefined`. The stream payload formatter receives `undefined`, Stremio shows blank episode titles. This fails silently — no error is thrown.
 
 **Warning signs:**
-Intermittent `blocked:slot_taken` for valid users, active session counts that exceed configured caps, or keys expiring unpredictably after retries/redeploys.
+- Episode titles are blank or "undefined" in Stremio UI
+- Tests pass because the stub returns expected shape, but live D doesn't
+- No Redis or log entries indicate failure (response is structurally valid, just semantically wrong)
 
-**Phase to address:**
-Phase 2 - Stream-path reliability and dependency controls
+**Prevention:**
+Add explicit field presence checks in the D client after receiving a response:
+- Assert `typeof response.url === "string"` and `response.url.startsWith("https://")`
+- Assert `typeof response.title === "string"` and `response.title.length > 0`
+
+Throw a `validation_error` on contract violation so it surfaces in `quarantine:events`. Write validation once in the D client, not scattered across callers.
+
+**Phase:** D client interface definition; re-verify when D ships its first endpoint.
 
 ---
 
-### Pitfall 3: Trusting client-provided forwarding headers for policy decisions
+### C3: Log Shipping During Shutdown Window Creates a Race With Rollup
 
 **What goes wrong:**
-IP-based limiting/quarantine and telemetry are driven by spoofable `x-forwarded-for` values, allowing bypass and poisoning of operational data.
-
-**Why it happens:**
-In serverless deployments, teams assume proxy headers are sanitized everywhere and skip explicit trust-boundary enforcement.
-
-**How to avoid:**
-Accept forwarded headers only from trusted edge infra, use platform-provided client IP fields, and separate identity/rate-limiting keys from raw user-controlled headers.
+Both nightly rollup and log shipping to D will run during the same shutdown window and both read `quarantine:events` from Redis. If they run concurrently, both see a partial list or one sees a list the other has already cleared. Data sent to D is not the same data that ends up in `daily:summary`. This failure is entirely silent.
 
 **Warning signs:**
-Rapid IP churn per user agent, impossible geo jumps, unexplained slot-usage spikes, and quarantine entries with malformed/multi-hop IP chains.
+- `quarantine:events` Redis list is empty after shutdown window but D received fewer events than expected
+- `daily:summary` shows 0 quarantine entries despite events being present before the window
+- Both operations complete without errors
 
-**Phase to address:**
-Phase 1 - Surface security hardening
+**Prevention:**
+Sequence these operations — rollup first, then ship to D. Do not parallelize. Do not have log shipping mutate (pop/delete) `quarantine:events` — read non-destructively (LRANGE, not LPOP). Rollup owns cleanup of `quarantine:events`.
+
+**Phase:** Log shipping implementation — do not start without this sequencing documented.
 
 ---
 
-### Pitfall 4: Leaving operational endpoints and telemetry data publicly exposed
+### C4: Timeout on D Stalls the Entire Request Pipeline
 
 **What goes wrong:**
-Routes like `/quarantine` leak IPs, episode IDs, and broker errors, creating privacy, abuse, and recon risks.
-
-**Why it happens:**
-Ops endpoints begin as debugging tools and remain open because they are "internal by convention" rather than protected by design.
-
-**How to avoid:**
-Require strong auth for admin routes, gate access by environment, redact sensitive fields in rendered output, and move detailed telemetry to protected logs/metrics backends.
+Broker client uses 60s timeout. With `MAX_SESSIONS=2`, one stuck D call occupying a session slot means 50% of capacity is unavailable. D is unproven — it may be slow or degraded during early rollout.
 
 **Warning signs:**
-Unexpected public traffic to admin routes, copied screenshots containing user data, or incident channels using production endpoints as ad-hoc dashboards.
+- Session gate starts returning `blocked:slot_taken` during periods when D is slow
+- Vercel function timeout logs appear
+- Redis `system:active_sessions` has entries with timestamps far in the past not rotating
 
-**Phase to address:**
-Phase 1 - Surface security hardening
+**Prevention:**
+D client must use much shorter timeouts than broker: 3–5s maximum for first attempt, no more than 8–10s total budget. Wire through same `executeBoundedDependency` pattern but with tighter parameters. Degradation path already works — reach it quickly, not after 60 seconds.
+
+**Phase:** D client interface definition. Timeout values must be part of the interface spec.
 
 ---
 
-### Pitfall 5: No explicit timeout, retry budget, or circuit policy for broker/Redis calls
+### C5: User-Agent Forwarding Failing Silently Is Invisible
 
 **What goes wrong:**
-External calls hang until platform timeout, amplifying latency and exhausting serverless concurrency during provider slowness.
-
-**Why it happens:**
-`fetch` defaults appear acceptable at low traffic, and teams defer resilience policies until first outage.
-
-**How to avoid:**
-Use `AbortController` deadlines, bounded retries with jitter only for safe operations, circuit breaking on repeated failures, and clear per-dependency latency/error SLOs.
+If UA forwarding uses a bare empty catch (`try { ... } catch { }`), a misconfigured D endpoint produces zero signal. Operators have no way to know UA data stopped flowing to D.
 
 **Warning signs:**
-P95/P99 latency cliffs during broker instability, rising function duration and timeout rates, and recovery requiring manual redeploy instead of auto-heal.
+- D's UA storage shows no records, no errors in A
+- `quarantine:events` has no D-related entries
+- Hourly analytics in A look normal
 
-**Phase to address:**
-Phase 2 - Stream-path reliability and dependency controls
+**Prevention:**
+UA forwarding must not use a bare empty catch. Emit a `warn`-level log entry on failure, or increment a dedicated reliability counter (`ua_forward_error`) visible in `/operator/metrics`. Data loss is acceptable (fire-and-forget), but the failure must be observable.
 
----
-
-### Pitfall 6: Tight coupling of routing, policy, rendering, and integrations in one handler
-
-**What goes wrong:**
-A single entrypoint change regresses unrelated behavior, and hardening work stalls because each edit has broad blast radius.
-
-**Why it happens:**
-Small addons start as one file for speed, then accumulate policy and ops features without modular boundaries.
-
-**How to avoid:**
-Refactor to modules (`routing`, `policy`, `redis-store`, `broker-client`, `admin-view`, `response-shaping`), preserve thin composition at entrypoint, and add contracts between modules.
-
-**Warning signs:**
-Large PRs touching many unrelated branches, frequent merge conflicts in one file, and bug fixes repeatedly breaking health/admin/stream paths.
-
-**Phase to address:**
-Phase 4 - Modularization and maintainability
+**Phase:** UA forwarding implementation.
 
 ---
 
-### Pitfall 7: Shipping without contract and failure-mode tests
+## Common Mistakes
 
-**What goes wrong:**
-Changes that appear safe break Stremio manifest/stream contracts or alter edge-case policy behavior (time windows, slot handling) in production.
+### M1: Replacing broker-client.js Instead of Creating a New Module
 
-**Why it happens:**
-Serverless addons often rely on manual endpoint checks; integration failures are hard to reproduce and are deferred.
+Create `modules/integrations/d-client.js` as a new module with an explicit interface. Do not delete or repurpose `broker-client.js` until D is confirmed live. Keep it as the reference implementation and use the existing dependency injection chain to swap resolvers.
 
-**How to avoid:**
-Add test suites for Stremio contract responses, broker malformed payloads, Redis failure fallbacks, and deterministic time-window boundaries using fixed clocks.
+### M2: Forgetting That `resolveEpisode` Is Injected, Not Called Directly
 
-**Warning signs:**
-Frequent "works locally" incidents, emergency rollbacks after minor refactors, and inability to assert behavior for 00:00/01:00/08:00 boundary cases.
+`stream-route.js` receives `resolveEpisode` as an injected dependency — it's wired in `http-handler.js` lines 369–385 and passed down. Audit every place `resolveEpisode` is assigned. Tests that cover stream resolution must inject a D-shaped response stub, not a broker-shaped one.
 
-**Phase to address:**
-Phase 4 - Modularization and maintainability
+### M3: Leaving Title Extraction Code as a Fallback
 
----
+Remove the filename extraction code at the same time as adding `response.title` consumption. Do not leave it as a fallback. If D doesn't return a title, that's a contract violation (C2) and should throw, not silently fall back to filename parsing.
 
-### Pitfall 8: Dependency drift without lockfile and compatibility gates
+### M4: Not Validating D Client Config at Startup
 
-**What goes wrong:**
-Unpinned dependency updates (especially addon SDK/runtime libs) change behavior across deploys, causing non-deterministic regressions.
+D client configuration must be validated at handler initialization time, not on first request. Mirror how `redis-client.js` validates env vars (throws "Missing Redis configuration"). Add D's config vars to the startup validation path.
 
-**Why it happens:**
-Early-stage services skip lockfiles and release checks to move quickly.
+### M5: Writing Tests Against the Stub Shape and Forgetting to Retest Against D's Actual Shape
 
-**How to avoid:**
-Commit lockfile, set dependency update policy, and run compatibility tests for manifest/catalog/stream handlers on each dependency bump.
-
-**Warning signs:**
-Behavior changes with no code diff, environment-specific inconsistencies, and post-deploy incidents tied to fresh install/builds.
-
-**Phase to address:**
-Phase 4 - Modularization and maintainability
+Write a dedicated integration test file (skippable with `D_INTEGRATION_TESTS=1`) that exercises the D client against a real or mock HTTP server. Tag it clearly: "must run before removing D stub." The skipped test is a forcing function — it cannot be deleted without intention.
 
 ---
 
-## Technical Debt Patterns
+## Regression Risks
 
-Shortcuts that seem reasonable but create long-term problems.
+### R1: Degradation Policy — Source Label Change
 
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Keep all logic in `serverless.js` | Fast edits for urgent fixes | Growing blast radius and slower incident response | Only temporary in first stabilization sprint |
-| Add silent `catch` + fallback only | Avoids visible client errors | Root cause blindness and repeated outages | Never |
-| Store free-form JSON strings for quarantine events | Minimal schema overhead | HTML injection risk, parsing failures, weak analytics | Only with strict schema validation and output escaping |
+`DEGRADED_STREAM_POLICY` maps `(source, cause)` tuples to response modes. If D client uses a different source label than `"broker"`, the policy map won't find a match. **Test:** Send a request when D is unreachable. Verify Stremio receives a valid degraded payload, not a 500.
 
-## Integration Gotchas
+### R2: Session Gate Timing — D Timeout Must Not Outlive Session Slot
 
-Common mistakes when connecting to external services.
+If a D call takes longer than `inactivityLimitSec`, the session may expire during resolution. **Test:** Simulate a D call exceeding `inactivityLimitSec`. Verify Redis session state is consistent.
 
-| Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| Broker resolve API | Assuming payload is always valid HTTPS URL | Validate schema and protocol, classify errors, and quarantine bad payloads safely |
-| Redis REST | Treating sequential commands as equivalent to atomic operations | Use Lua/transaction patterns for session gating and idempotent writes |
-| Serverless edge/proxy | Trusting raw forwarded headers for identity and controls | Trust only platform-sanitized client IP and enforce trusted proxy boundaries |
+### R3: `inFlightStreamIntents` Deduplication — Key Must Match New Resolution Path
 
-## Performance Traps
+If D client introduces any key transformation, the deduplication map key may not match across concurrent requests. **Test:** Send two simultaneous requests for the same episode. Verify only one D call is made.
 
-Patterns that work at small scale but fail as usage grows.
+### R4: Time Window — Must Not Be Delayed by D Client Code
 
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Many sequential Redis REST round trips per stream request | Latency variance, slot-check delays, timeouts under bursts | Batch commands and minimize hot-path reads/writes | Burst traffic and moderate concurrency |
-| Rendering full admin HTML table on each request | Increased CPU time and response lag on diagnostics route | Cache or expose JSON API and paginate client-side | Frequent operational access during incidents |
-| Dependency calls sharing same timeout budget as full request | End-to-end timeout exhaustion and retry storms | Separate per-call deadlines and global request budget | Provider degradation windows |
+`runNightlyMaintenance()` runs when the first request arrives during shutdown window. D client or log shipping code must not delay its return. **Test:** Simulate a request during shutdown window with slow D. Verify response is still `blocked:shutdown_window`.
 
-## Security Mistakes
+### R5: Hourly Analytics — Existing Field Names Must Not Change
 
-Domain-specific security issues beyond general web security.
+`trackHourlyEvent` writes `stream.requests`, `stream.success`, `stream.degraded`. Rollup and analytics endpoints read these exact field names. **Test:** After integration, query `/operator/analytics`. Verify all existing counters increment correctly.
 
-| Mistake | Risk | Prevention |
-|---------|------|------------|
-| Public quarantine/admin telemetry routes | Data leakage (IPs/content IDs), recon for abuse | Strong authn/authz, environment gating, and field redaction |
-| Unescaped rendering of broker/error data in HTML | Stored/reflected XSS in operational pages | Centralized output escaping and strict content sanitization |
-| Global wildcard CORS on operational JSON | Unnecessary cross-origin exposure of internals | Route-level CORS with explicit allowlist |
+### R6: Four Unwired Tests Cover Integration-Adjacent Paths
 
-## UX Pitfalls
+CONCERNS.md Bug 4: these tests never run in CI:
+- `tests/analytics-hourly.test.js`
+- `tests/analytics-nightly-rollup.test.js`
+- `tests/session-view-ttl.test.js`
+- `tests/request-controls-nightly.test.js`
 
-Common user experience mistakes in this domain.
-
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Generic empty stream for all failures | Users cannot distinguish temporary outage from unsupported content | Keep safe fallback but encode machine-readable reason for ops, and improve client-facing consistency |
-| Aggressive global slot cap without context | Legitimate users blocked during short bursts | Adaptive policy (per-IP/token bucket/global cap) with clear quarantine/retry behavior |
-| Flaky availability window behavior at timezone boundaries | "Sometimes works" perception and trust erosion | Deterministic time logic with tested boundary cases and clear status signaling |
-
-## "Looks Done But Isn't" Checklist
-
-Things that appear complete but are missing critical pieces.
-
-- [ ] **Timeouts added:** Also verify retry caps, jitter, and cancellation propagation across broker + Redis calls.
-- [ ] **Admin route protected:** Also verify data redaction and cache-control/no-store behavior.
-- [ ] **Session limit works:** Also verify race safety under concurrent requests and key expiry correctness.
-- [ ] **Fallback still returned:** Also verify failure classification and alerting signal are emitted.
-
-## Recovery Strategies
-
-When pitfalls occur despite prevention, how to recover.
-
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| Silent failure masking | MEDIUM | Backfill structured logs, add temporary high-cardinality tracing in stream path, replay recent failures from quarantine events |
-| Session race/slot corruption | HIGH | Disable strict slot enforcement temporarily, clear/rebuild affected Redis keys safely, deploy atomic gating hotfix |
-| Public admin exposure | HIGH | Immediately gate route at edge, rotate related credentials if leaked context suggests risk, purge sensitive retained telemetry |
-
-## Pitfall-to-Phase Mapping
-
-How roadmap phases should address these pitfalls.
-
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| Fallback treated as success | Phase 2 and Phase 3 | Error class metrics and correlation IDs visible; alerts fire on broker/redis failure thresholds |
-| Non-atomic Redis gating | Phase 2 | Concurrency tests show no slot oversubscription or false rejects under burst load |
-| Spoofable forwarded headers | Phase 1 | Requests with forged headers do not alter identity/quarantine attribution |
-| Public operational endpoints | Phase 1 | Unauthorized callers cannot access admin routes in production |
-| Missing timeout/retry/circuit policies | Phase 2 | Dependency latency is bounded and timeout rate no longer cascades during provider slowness |
-| Monolithic handler coupling | Phase 4 | Module-level tests pass independently and PR blast radius decreases |
-| No contract/failure-mode tests | Phase 4 | CI validates manifest/catalog/stream contracts and edge-case policies |
-| Dependency drift | Phase 4 | Lockfile committed; dependency updates require passing compatibility suite |
-
-## Sources
-
-- `/.planning/PROJECT.md` (project requirements, constraints, and milestone context)
-- `/.planning/codebase/CONCERNS.md` (current failure modes, security gaps, test gaps, and scaling risks)
-- `/.planning/codebase/INTEGRATIONS.md` (broker/Redis/serverless dependency model)
+Wire these tests **before** integration begins — they are the regression net for exactly the paths this work modifies.
 
 ---
-*Pitfalls research for: Stremio stream-resolution addon backend with Redis and broker dependencies*
-*Researched: 2026-02-21*
+
+## Testing Gaps
+
+### T1: D Unavailability Cannot Be Tested Against a Real D
+
+Requires test fixtures that simulate: hanging HTTP server (timeout), 500/connection refused (error classification), malformed response (contract validation). D client must be designed so these failure modes can be injected in tests.
+
+**Gap:** D client test file must be created as part of the interface definition phase, not deferred.
+
+### T2: Log Shipping Race Condition Is Not Unit-Testable in Isolation
+
+The rollup vs log shipping race requires integration-level testing with concurrent operation and mock Redis recording read order. This is hard to reproduce deterministically.
+
+**Gap:** Sequencing must be enforced by code structure, not by test. Document and make it reviewable.
+
+### T3: Stremio Protocol Compliance Cannot Be Tested Without a Stremio Client
+
+**Gap:** Add schema validation test for the stream payload that checks exact Stremio-required fields (`url`, `title`, `name`, metadata) via JSON schema assertion against `modules/presentation/stream-payloads.js` output.
+
+### T4: UA Forwarding Cannot Confirm D Storage Without D Running
+
+Tests can confirm A made the call with correct UA, but cannot confirm D stored it. This is acceptable during stub phase.
+
+**Gap:** Document as explicit manual verification step required before removing the stub.
+
+### T5: Nightly Rollup Bugs Will Contaminate Log Shipping Tests
+
+CONCERNS.md documents Bug 1 (analytics gap in shutdown window), Bug 2 (HyperLogLog unimplemented), Bug 3 (daily rollup unique count always zero). These exist in code paths log shipping will touch.
+
+**Gap:** Fix Bug 1, Bug 2, Bug 3 before writing log shipping tests. Do not write tests against known-broken behavior.
+
+---
+
+*Pitfalls research: 2026-02-28*

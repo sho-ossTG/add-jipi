@@ -1,164 +1,146 @@
-# Project Research Summary
+# Research Summary — Server A → D Integration
 
-**Project:** add-jipi
-**Domain:** Stremio addon backend (serverless stream resolver with Redis + broker dependencies)
-**Researched:** 2026-02-21
-**Confidence:** MEDIUM-HIGH
+**Synthesized:** 2026-02-28
+**Sources:** STACK.md, FEATURES.md, ARCHITECTURE.md, PITFALLS.md
+**Overall Confidence:** HIGH (based on direct codebase analysis, not external references)
 
-## Executive Summary
-
-This is a brownfield production-hardening effort for a Stremio addon backend where the core product already exists, but reliability, security, and maintainability are below production expectations. Across all research tracks, the consistent expert pattern is: keep manifest/catalog/stream protocol compatibility stable, then isolate risk-heavy concerns (policy, integrations, admin surfaces, telemetry) behind explicit module boundaries instead of continuing with a monolithic handler.
-
-The recommended build path is opinionated and incremental: run on Node 24 LTS with Fastify 5 and a pinned `stremio-addon-sdk`, move Redis/broker calls into bounded adapters, implement atomic session gating, and treat fallback responses as degraded outcomes that are observable (typed reason codes + correlation IDs) rather than silent success. Launch scope should prioritize secure ops surfaces, reliable stream-path controls, and diagnosable failures; differentiators like dry-run policy simulation and richer SLO dashboards come after baseline stability.
-
-The primary risks are already known and avoidable: spoofable trust identity, public operational data exposure, non-atomic Redis controls under concurrency, and latency cascades from unbounded dependency calls. Mitigation order is clear from dependencies: secure surface first, reliability second, observability third, and deep modularization/test governance fourth.
+---
 
 ## Key Findings
 
-### Recommended Stack
+**1. Zero new dependencies required.**
+Every pattern needed already exists in the codebase. `executeBoundedDependency`, jitter-backoff retry, Redis optional-availability (env-var stub mode), fire-and-forget side channels — all of these are live in `broker-client.js` and `redis-client.js`. The D client is a clone-and-adapt, not a greenfield build.
 
-`STACK.md` recommends a modern but conservative serverless Node stack with clear compatibility gates.
+**2. The integration is a single seam swap, not a refactor.**
+D client plugs into one injection point: `resolveEpisodeResolver` in `stream-route.js`. The calling contract (`resolveEpisode(episodeId)` → `{ url, title }`) does not change. The rest of the request pipeline — policy gates, session management, analytics, degraded stream policy — is untouched.
 
-**Core technologies:**
-- **Node.js 24 LTS:** runtime baseline with long support window and first-class abort/timeout primitives for dependency control.
-- **Fastify 5.x:** modular routing and plugin boundaries suitable for splitting transport/policy/integrations cleanly.
-- **stremio-addon-sdk 1.6.x (exact pin):** compatibility anchor for Stremio contracts during refactors.
-- **@upstash/redis 1.x + @upstash/ratelimit 2.x:** serverless-native Redis REST access and admission throttling.
-- **OpenTelemetry JS + Sentry Node SDK:** correlated traces/errors/metrics for cross-layer incident diagnosis.
+**3. Four tests that must pass are currently not wired in CI.**
+PITFALLS.md R6 / CONCERNS.md Bug 4: `analytics-hourly`, `analytics-nightly-rollup`, `session-view-ttl`, and `request-controls-nightly` test files exist but never run. These cover exactly the paths this integration modifies. They must be wired before integration begins.
 
-Critical version constraints: Node >=20 (target 24 LTS), Fastify 5.x, Vitest 4.x, exact `stremio-addon-sdk` pin, and lockfile-backed dependency governance.
+**4. Three existing bugs in the rollup path must be fixed before log shipping is built.**
+CONCERNS.md Bug 1 (analytics gap in shutdown window), Bug 2 (HyperLogLog unimplemented), Bug 3 (daily rollup unique count always zero) all live in `nightly-rollup.js` — the same path log shipping will touch. Writing log shipping tests against broken code will produce false confidence.
 
-### Expected Features
+**5. The HTTP contract between A and D does not yet exist.**
+`POST /api/resolve`, `POST /api/ua`, and `POST /api/logs` are proposed shapes documented in ARCHITECTURE.md and FEATURES.md. They are not yet agreed with the D team. Nothing can be wired until this contract is signed off.
 
-`FEATURES.md` confirms a launch-focused feature set centered on secure operations and reliable stream delivery.
+---
 
-**Must have (table stakes):**
-- Stable Stremio `manifest`/`catalog`/`stream` contract with compatibility tests.
-- Reliable episode resolution with bounded dependency behavior and safe fallback semantics.
-- Correct Redis-backed admission/session control with atomic semantics under concurrency.
-- Secure admin/health diagnostics with auth, trust boundaries, and redacted outputs.
-- Deterministic failure handling with protocol-safe client responses plus internal typed reasons.
+## Technology Decisions
 
-**Should have (competitive):**
-- Degraded-mode transparency via failure taxonomy and correlation IDs.
-- Explicit timeout/retry/circuit resilience policies per dependency.
-- Modular backend boundaries that reduce blast radius and speed safe changes.
-- First-class operational telemetry and later policy dry-run diagnostics.
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| HTTP client | Native `fetch` | Already in use; no new deps |
+| Retry/timeout | `executeBoundedDependency` (shared) | Duplicated across broker/redis — extract before adding third copy |
+| Stub mode | `D_BASE_URL` unset → structured error | Mirrors Redis optional-availability pattern exactly |
+| UA forwarding | Fire-and-forget, no await, no retry | UA is low-value; retrying adds complexity for no gain |
+| Log ship trigger | `POST /operator/ship/logs` via Vercel Cron | No process exit hooks in serverless; route + cron is the only viable pattern |
+| D client timeouts | 3–5s attempt / 8–10s total | D is local infra, not external; 60s broker timeouts are dangerous with `MAX_SESSIONS=2` |
 
-**Defer (v2+):**
-- New content-domain expansion beyond current ID scope.
-- Multi-tenant account/billing capabilities.
+**Do not use:** axios/got/node-fetch, p-retry/async-retry, external scheduler services, process exit hooks.
 
-### Architecture Approach
+---
 
-`ARCHITECTURE.md` defines a layered service model: thin `entry/transport` routing and guards, `application` services for policy/stream/admin orchestration, `integrations` for Redis and broker adapters, `domain` for Stremio contract shaping, and `observability` as a first-class boundary. Key patterns are intercept-and-delegate routing, typed policy decision objects, and bounded integration adapters with timeout/validation/error normalization.
+## Architecture Approach
 
-**Major components:**
-1. `transport` + `entry` - path dispatch, auth/CORS/trust guards, protocol-safe response shaping.
-2. `application` services - policy decisions, stream orchestration, admin diagnostics aggregation.
-3. `integrations` adapters - Redis gateway and broker client with bounded/typed external call behavior.
-4. `domain` boundary - Stremio contract wrappers and stream DTO normalization.
-5. `observability` - structured events, latency/counter metrics, correlation ID propagation.
+The D client (`modules/integrations/d-client.js`) is a new factory module exposing three functions:
+- `resolveEpisode(episodeId)` — replaces the broker-client call; same injection point
+- `forwardUserAgent(userAgent, episodeId)` — fire-and-forget side channel
+- `shipFailureLogs(events)` — fire-and-forget nightly side channel
 
-### Critical Pitfalls
+**Files that change:**
+- `modules/integrations/d-client.js` — new
+- `addon.js` — swap import + instantiation
+- `modules/routing/stream-route.js` — swap resolver; remove title extraction; add UA forward call
+- `modules/routing/operator-routes.js` — add log ship trigger
+- `modules/routing/http-handler.js` — pass `D_BASE_URL` into dependency builder
 
-1. **Fallback treated as success** - keep client-safe fallback, but emit typed failure classes and correlation IDs every time.
-2. **Non-atomic Redis gating** - implement atomic slot/session semantics and stress test concurrent bursts.
-3. **Spoofable forwarded-header trust** - trust only platform-sanitized identity and hardened proxy boundaries.
-4. **Public admin/quarantine exposure** - require strong auth, environment gates, and sensitive-field redaction.
-5. **No timeout/retry/circuit policy** - enforce per-call deadlines, bounded retries, and clear degrade rules to avoid latency cascades.
+**Files that do not change:** all policy, session, analytics, and operator auth modules.
 
-## Implications for Roadmap
+`broker-client.js` is kept as reference until D is confirmed live in production, then deleted.
 
-Based on combined research, suggested phase structure:
+**Boundary rule:** A must never call B or C directly. All resolution flows through D's `/api/resolve`. Any code that inspects broker URLs or parses filenames is dead code to be removed.
 
-### Phase 1: Security Boundary Hardening
-**Rationale:** Security defects are immediate production risk and a prerequisite for safe diagnostics and policy attribution.
-**Delivers:** Trusted identity handling, admin authn/authz, route-scoped CORS, redacted operational outputs.
-**Addresses:** Table-stakes secure operational surfaces and deterministic request attribution.
-**Avoids:** Spoofed-header abuse and public telemetry leakage pitfalls.
+---
 
-### Phase 2: Stream-Path Reliability and Admission Correctness
-**Rationale:** Core product value is playable streams under load; dependency and Redis correctness are the largest outage multipliers.
-**Delivers:** Atomic session gating, bounded broker/Redis call policies, typed dependency failure model.
-**Uses:** Node timeout/abort primitives, Upstash Redis + ratelimit tooling, adapter-based integration boundaries.
-**Implements:** `application/policy-engine`, `application/stream-service`, `integrations/*` hot-path controls.
+## Critical Constraints
 
-### Phase 3: Observability and Degraded-Mode Transparency
-**Rationale:** Reliability controls are only useful if teams can detect, classify, and alert on degradation quickly.
-**Delivers:** Correlation IDs, structured outcome schema, dependency latency/error metrics, initial SLO-driven alerting.
-**Addresses:** Differentiator goals for degraded-mode transparency and operator diagnostics quality.
-**Avoids:** Silent failure masking and low-signal incident response.
+1. **D client must throw on every non-success path.** Silent null returns cause vacuous HTTPS validation passes and broken Stremio payloads with no error surfacing. No silent null returns anywhere in the D client.
 
-### Phase 4: Modularization, Test Governance, and Dependency Hygiene
-**Rationale:** After risk controls are in place, complete the architecture split and enforce long-term change safety.
-**Delivers:** Full modular boundaries, contract/failure-mode/concurrency tests, lockfile + update gates.
-**Addresses:** Maintainability differentiator and stable delivery velocity.
-**Avoids:** God-handler regressions, contract drift, and dependency drift incidents.
+2. **Log shipping must run after rollup, not concurrently.** Both operations touch `quarantine:events`. Log shipping reads non-destructively (LRANGE, not LPOP). Rollup owns the cleanup. This ordering must be enforced by code structure, not tests.
 
-### Phase 5: Operator Experience Enhancements (v1.x)
-**Rationale:** Higher-order tools should follow verified telemetry and stable policies.
-**Delivers:** Policy dry-run diagnostics and tuned SLO dashboards.
-**Addresses:** Should-have differentiators that improve operational confidence.
-**Avoids:** Premature complexity before core reliability/security targets hold.
+3. **D source label must match `DEGRADED_STREAM_POLICY` map keys.** If the D client uses a different source label than `"broker"`, the policy map won't find a match and degraded requests will 500 instead of returning a valid degraded payload. Use `"broker"` for now; update to `"d"` in a future milestone.
 
-### Phase Ordering Rationale
+4. **Contract must be defined and agreed before wiring.** A uses `response.title` and `response.url` verbatim. If D ships a different shape, titles are silently blank and no error is thrown. The contract is the prerequisite for all other phases.
 
-- Security precedes everything because exposed ops surfaces and spoofable identity are immediate abuse/privacy liabilities.
-- Reliability controls come before observability maturity because there must be stable policy/dependency behavior to measure.
-- Observability precedes full optimization and ops UX so decisions are data-driven, not anecdotal.
-- Modularization/testing consolidates gains and prevents regression loops as velocity increases.
-- v2 scope expansion is intentionally deferred until launch SLOs and operational safeguards are consistently met.
+5. **Vercel serverless has no process exit hooks.** Any shutdown-triggered work must be route-based and externally triggered (Vercel Cron or equivalent). This is not negotiable on the platform.
 
-### Research Flags
+---
 
-Phases likely needing deeper research during planning:
-- **Phase 2:** Redis REST atomicity implementation strategy under current provider/runtime constraints and broker timeout budget tuning.
-- **Phase 3:** Telemetry cardinality/retention thresholds and alert design for serverless cost-performance balance.
-- **Phase 5:** Safe operator tooling ergonomics for policy simulation without introducing new exposure risks.
+## Top Risks
 
-Phases with standard patterns (skip research-phase):
-- **Phase 1:** Admin auth, trust-boundary, and route-level CORS/redaction controls are mature and well-documented.
-- **Phase 4:** Modular refactor patterns, Node contract testing, and lockfile governance are standard engineering practices.
+**C1 — D failure silently promotes to success.**
+If error handling in the D client isn't correctly wired, a failed D call resolves to `undefined` instead of throwing. The HTTPS validation passes vacuously, the degraded path is never reached, no quarantine event is written, and Stremio gets a broken payload. Mitigation: throw on all non-success paths; unit test each error class (timeout, 404, 503, malformed response).
+
+**C3 — Race condition between nightly rollup and log shipping.**
+Both operations run in the same shutdown window and both read `quarantine:events`. Concurrent reads produce split or missing data, with no error thrown by either operation. Mitigation: enforce sequential execution (rollup first, ship second); log shipping reads non-destructively and does not clear the list.
+
+**C4 — D timeout stalls the entire request pipeline.**
+With `MAX_SESSIONS=2`, one 60s-timeout D call blocks 50% of capacity. During early D rollout, D may be slow or degraded. Mitigation: set D timeouts to 3–5s attempt / 8–10s total — tight enough to reach the degradation path quickly.
+
+---
+
+## Recommended Phase Order
+
+**Phase 0: Prerequisites (before integration code is written)**
+- Wire the 4 unwired CI test files (R6)
+- Fix nightly rollup Bug 1, Bug 2, Bug 3 (T5)
+- Define and agree the D HTTP contract with the D team
+- Rationale: without these, integration will be built on a broken foundation and the regression net will have holes
+
+**Phase 1: D Client Module — stub-first**
+- Extract `executeBoundedDependency` to shared module
+- Build `d-client.js` with stub mode; all three functions no-op when `D_BASE_URL` unset
+- Write contract tests for stub behavior and all error classes (C1, C2 mitigation)
+- Nothing in the request path changes yet; safe to deploy
+
+**Phase 2: Wire resolveEpisode into resolution path**
+- Update `resolveEpisodeResolver` in `stream-route.js` to fall through to `createDClient`
+- Update `addon.js` import/instantiation
+- Remove title extraction (`cleanTitle`, `resolveBrokerFilename`) — no fallback (M3)
+- Update stream contract tests to inject D-shaped stubs
+- Verify degraded path still works with D source label (R1)
+
+**Phase 3: UA Forwarding**
+- Add fire-and-forget `forwardUserAgent` call in `stream-route.js` success branch
+- Emit `warn`-level log on failure — not a bare empty catch (C5)
+- Confirm it never propagates errors into critical path
+
+**Phase 4: Nightly Log Shipping**
+- Add `shipFailureLogs` trigger in `operator-routes.js`, sequenced after rollup (C3)
+- Log shipping reads non-destructively; rollup owns cleanup
+- Test that shipping failure does not block rollup response
+- Add `failuresShipped` count to rollup response body
+
+**Phase 5: Broker Client Deprecation**
+- After D is live and stable in production: remove all `broker-client.js` references
+- Delete `broker-client.js`
+- Update telemetry source label from `"broker"` to `"d"` in `observability/events.js`
+
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Backed by official docs with explicit runtime/version compatibility and serverless-fit rationale. |
-| Features | MEDIUM | Well-structured and actionable, but primarily derived from internal artifacts rather than external benchmark evidence. |
-| Architecture | HIGH | Detailed boundaries, data flow, and incremental build order are concrete and internally consistent. |
-| Pitfalls | HIGH | Domain-specific failure modes are precise, preventive actions are clear, and phase mapping is practical. |
+| Stack | HIGH | Based on direct codebase read; zero unknowns on A's side |
+| Features | HIGH | Scope is clear; anti-features explicitly documented |
+| Architecture | HIGH | Integration seam is well-defined; one injection point |
+| Pitfalls | HIGH | Based on codebase analysis of real existing bugs |
+| D contract | LOW | Contract is proposed, not agreed — biggest remaining unknown |
+| Vercel Cron config | MEDIUM | Pattern is sound; exact `vercel.json` syntax needs verification at implementation |
 
-**Overall confidence:** MEDIUM-HIGH
-
-### Gaps to Address
-
-- **Redis atomic semantics details:** Validate exact Lua/transaction feasibility and fallback strategy in current Redis REST environment before final phase scoping.
-- **SLO thresholds and alert budgets:** Calibrate with baseline production traffic to avoid noisy or blind monitoring.
-- **Policy simulation guardrails:** Define access controls and redaction requirements before shipping dry-run tooling.
-
-## Sources
-
-### Primary (HIGH confidence)
-- `.planning/research/STACK.md`
-- `.planning/research/FEATURES.md`
-- `.planning/research/ARCHITECTURE.md`
-- `.planning/research/PITFALLS.md`
-- https://nodejs.org/en/about/previous-releases - Node LTS lifecycle and runtime support guidance.
-- https://fastify.dev/docs/latest/Reference/LTS/ - Fastify support model and Node compatibility.
-- https://upstash.com/docs/redis/sdks/ts/overview - Upstash Redis client recommendations for serverless.
-- https://upstash.com/docs/redis/sdks/ratelimit-ts/overview - serverless rate-limiting patterns.
-- https://docs.sentry.io/platforms/javascript/guides/node/ - Node error monitoring/instrumentation guidance.
-
-### Secondary (MEDIUM confidence)
-- https://opentelemetry.io/docs/languages/js/ - OpenTelemetry JS instrumentation patterns.
-- https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static - timeout primitive for bounded external calls.
-- https://www.npmjs.com/package/stremio-addon-sdk - package state/version recency context.
-- `.planning/PROJECT.md`
-- `.planning/codebase/ARCHITECTURE.md`
-- `.planning/codebase/CONCERNS.md`
-
----
-*Research completed: 2026-02-21*
-*Ready for roadmap: yes*
+**Gaps requiring attention during planning:**
+- D HTTP contract must be agreed before Phase 1 ends (blocks Phase 2)
+- D's actual response shape must be validated against stub shape before removing the stub (T4)
+- Vercel Cron tier availability and syntax (verify at Phase 4)
+- Whether stub mode falls back to direct broker call or returns degraded (STACK.md open question — recommend degraded, not fallback, to enforce boundary)

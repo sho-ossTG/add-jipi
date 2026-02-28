@@ -1,168 +1,218 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-02-25
+**Analysis Date:** 2026-02-28
 
 ## Naming Patterns
 
 **Files:**
-- `kebab-case.js` for all module files under `modules/` and `observability/` (e.g., `broker-client.js`, `session-gate.js`, `hourly-tracker.js`).
-- Lowercase root-level files with role-oriented names: `addon.js`, `serverless.js`.
+- Kebab-case for file names: `stream-route.js`, `redis-client.js`, `session-gate.js`
+- Test files use `.test.js` suffix: `contract-stream.test.js`, `policy-time-window.test.js`
+- Convention: no index files in modules, use descriptive names instead
 
 **Functions:**
-- `camelCase` throughout.
-- Factory functions: `create` prefix (e.g., `createRedisClient`, `createBrokerClient`, `createHttpHandler`).
-- Boolean predicates: `is` prefix (e.g., `isStremioRoute`, `isWithinShutdownWindow`, `isCurrentEpisodeSelection`, `isTransientDependencyFailure`).
-- Route handlers: `handle` prefix (e.g., `handleStreamRequest`, `handleOperatorRoute`, `handlePreflight`).
-- Projectors: `project` prefix (e.g., `projectPublicHealth`).
-- Renderers: `render` prefix (e.g., `renderLandingPage`, `renderQuarantinePage`).
+- camelCase for all function declarations: `createRedisClient()`, `executeAsyncFunc()`, `handleStreamRequest()`
+- Verb prefixes for action functions: `create*`, `get*`, `set*`, `run*`, `handle*`, `apply*`, `build*`, `normalize*`
+- Prefix functions that return factories or builders with `create` or `build`: `createRedisClient()`, `buildEpisodeShareKey()`
+- Query/accessor functions use `get`: `getRedisConfig()`, `getLatestSelection()`, `getTrustedClientIp()`
+- Predicate functions use `is`: `isWithinShutdownWindow()`, `isCurrentEpisodeSelection()`, `isTransientDependencyFailure()`
+- Functions that check/validate use `parse` or `normalize`: `parseEpisodeShare()`, `normalizeAllowedIps()`, `normalizeCor relationId()`
 
 **Variables:**
-- `UPPER_SNAKE_CASE` for module-level constants (e.g., `EPISODE_SHARE_TTL_SEC`, `MAX_SESSIONS`, `DEFAULT_TRUST_PROXY`, `SESSION_GATE_SCRIPT`).
-- `camelCase` for local variables and parameters (e.g., `episodeId`, `controlResult`, `shareKey`).
+- camelCase for all variables: `inFlightStreamIntents`, `latestStreamSelectionByClient`, `startedAt`
+- Uppercase with underscores for constants: `DEFAULT_TIME_ZONE`, `SLOT_TTL`, `EPISODE_SHARE_MAX_IPS`
+- Prefix utility Maps with descriptive names: `inFlightStreamIntents` (stores promises), `latestStreamSelectionByClient` (caches)
+- Use descriptive suffixes for related values:
+  - Time values: `createdAtMs`, `nowMs`, `expiresAtMs`, `Timeout`, `TTL`
+  - Collections: `...Map`, `...Set`, `...Array` (implicit in naming when unclear)
+  - HTTP/network: `statusCode`, `response`, `request`, `headers`
 
 **Types:**
-- Not applicable: CommonJS JavaScript, no TypeScript interfaces or JSDoc type annotations.
+- No TypeScript in codebase - vanilla JavaScript with JSDoc annotations when complex
+- Document parameter objects as nested structures in function comments
+- Use Object.freeze() for constant objects and config
+
+**Exports:**
+- Named exports via `module.exports = { functionName, anotherFunc }`
+- Avoid default exports; use named imports: `const { func } = require("./module")`
+- Match export names to function/constant names exactly
 
 ## Code Style
 
 **Formatting:**
-- 2-space indentation, double quotes, trailing semicolons.
-- No formatter config detected (no `.prettierrc*`, `biome.json`, or `eslint.config.*`). Style enforced by code review.
+- No linter/formatter config found (`.eslintrc` or `.prettierrc` absent)
+- Observed style:
+  - 2-space indentation (consistent across all files)
+  - Single quotes for strings: `'string'` preferred
+  - Semicolons required at end of statements
+  - Trailing commas in multi-line objects/arrays
 
 **Linting:**
-- No linting tooling detected. Consistency maintained manually.
+- No linting enforced in development or CI
+- Convention: developers follow Node.js best practices manually
 
 ## Import Organization
 
 **Order:**
-1. External npm dependencies (e.g., `stremio-addon-sdk`, `proxy-addr`, `pino`).
-2. `observability/` imports.
-3. Local `modules/` imports, grouped by boundary layer.
+1. Built-in Node.js modules: `const test = require("node:test")`
+2. Third-party packages: `const pino = require("pino")`
+3. Local module imports (relative paths): `const { func } = require("../../../module")`
+4. Constants and variable declarations follow imports
 
-**Path Aliases:**
-- None; relative paths only (e.g., `../../observability/events`, `../integrations/redis-client`).
+**Path Style:**
+- Relative paths with `../` pattern: `require("../integrations/redis-client")`
+- Import statement order consistent with entry point to leaf relationships
+- No path aliases used in codebase
 
-**Module Manifest:**
-- `modules/index.js` is a maintainer-facing manifest listing module entrypoints. It is **never imported at runtime**. Runtime code imports concrete files directly (e.g., `modules/routing/http-handler.js`).
-
-## Dependency Injection (DI) Pattern
-
-All significant functions use the signature `(input = {}, injected = {})`:
-
-```js
-async function handleStreamRequest(input = {}, injected = {}) {
-  const formatStream = injected.formatStream || defaultStreamPayloads.formatStream;
-  const sendDegradedStream = injected.sendDegradedStream || streamPayloads.sendDegradedStream;
-  // ...
-}
+**Module Loading Pattern:**
+```javascript
+const { createRedisClient } = require("../integrations/redis-client");
+const defaultTimeWindow = require("../policy/time-window");
 ```
-
-- `input` — the data payload for this invocation (request, pathname, IP, etc.).
-- `injected` — overridable dependencies; resolve to production defaults when not provided.
-- This pattern enables full test injection without module mocking.
-
-## Handler Return Shape
-
-All route handlers return a consistent `{ handled, outcome }` shape:
-
-```js
-// Route matched and handled:
-return {
-  handled: true,
-  outcome: { source: "broker", cause: "success", result: "success" }
-};
-
-// Route not matched (fall through):
-return { handled: false };
-```
-
-`outcome.result` is one of: `"success"`, `"degraded"`, `"failure"`.
+- Destructure specific exports when targeting individual functions
+- Use direct assignment for modules exporting entire namespace
 
 ## Error Handling
 
-**Infrastructure errors:**
-- Attach `.code` (machine-readable string) and `.statusCode` (HTTP integer) before throwing.
-```js
-const err = new Error("Broker request failed");
-err.code = "broker_http_error";
-err.statusCode = response.status;
+**Patterns:**
+- Errors have explicit `.code` property for classification: `error.code = "redis_config_missing"`
+- Error codes are snake_case: `dependency_timeout`, `redis_http_error`, `redis_response_error`
+- Status codes attached when relevant: `error.statusCode = 404`
+- Error classification via `classifyFailure()` function in `observability/events.js`
+
+**Throw Strategy:**
+- Create error with `.code` then throw:
+```javascript
+const err = new Error("Missing Redis configuration");
+err.code = "redis_config_missing";
 throw err;
 ```
+- Try/catch blocks catch by type, re-throw with classification
+- "Best-effort" patterns: catch silently in non-critical paths with comment explaining why
 
-**Transient vs. fatal:**
-- `isTransientDependencyFailure(error)` classifies retryable errors (408, 429, 5xx, ETIMEDOUT, ECONNRESET, ECANCELED, AbortError).
-- `executeBoundedDependency` handles one retry within a total budget.
-
-**Best-effort paths:**
-- Any `catch` block that intentionally swallows errors must include a comment explaining why:
-```js
-} catch {
-  // Best-effort metric path.
-}
-
-} catch {
-  // Hourly analytics are best-effort and must not affect requests.
-}
-```
-
-**Error classification:**
-- `classifyFailure({ error, source, reason })` in `observability/events.js` normalizes any error to `{ source, cause }`.
-- Used by all boundary layers before emitting telemetry.
+**Validation:**
+- Input validation at function entry with guard clauses
+- Return null/empty for invalid inputs when safe: `return null`, `return []`, `return {}`
+- Throw errors only for truly exceptional conditions (missing deps, bad config)
 
 ## Logging
 
-**Framework:** Pino, via `observability/logger.js` (`getLogger({ component })`).
+**Framework:** Pino (optional fallback to console.log)
 
-**Pattern:**
-- All structured log output flows through `emitEvent(logger, eventName, payload)` in `observability/events.js`.
-- Never call `logger.info` or `console.log` directly — use `emitTelemetry` or `emitEvent`.
-- Event names come from the `EVENTS` enum: `request.start`, `policy.decision`, `dependency.attempt`, `dependency.failure`, `request.degraded`, `request.complete`.
-- Sensitive headers (tokens, raw IPs in log payloads) are not included — IPs are redacted in output layers.
-- Correlation ID automatically attached to every event via `getCorrelationId()` (AsyncLocalStorage).
+**Patterns:**
+- `getLogger()` returns logger with correlation ID bound
+- Log redaction configured for sensitive paths: `headers.authorization`, `token`, `refreshToken`
+- Structured logging via `logger.info()`, `logger.warn()`, `logger.error()`
+- Logger methods take payload objects: `logger.info({ message: "text", data })`
+- Fallback logger in `observability/logger.js` if Pino unavailable
+
+**Observability Integration:**
+- Events emitted via `emitEvent()` with event names from `EVENTS` enum
+- Events include source, cause, and correlation ID automatically
+- Dependency failures classified via `classifyFailure()` for consistent categorization
 
 ## Comments
 
-**When to comment:**
-- Named operational phases in a handler (e.g., `// 1. Time Window Check`, `// Enforce HTTPS`).
-- Best-effort catch blocks (required — see Error Handling above).
-- Non-obvious invariants or workarounds.
-
-**When not to comment:**
-- Self-descriptive function calls or standard patterns.
+**When to Comment:**
+- Comments explain business logic or non-obvious decisions
+- Implementation details in close function calls rarely commented
+- Comments clarify complex calculations: time windows, slot rotation logic
+- Comments mark "best-effort" paths that fail silently for resilience
 
 **JSDoc/TSDoc:**
-- Not used anywhere in the codebase. Keep function names and parameter names self-descriptive.
+- Not heavily used - codebase is JavaScript, not TypeScript
+- Comments on complex functions describe inputs/outputs when unclear
+- Functions with injected dependencies document injection parameters
+
+**Example Patterns:**
+```javascript
+// Reliability counters are best-effort and must not affect responses.
+try {
+  await incrementReliabilityCounter(redisCommand, labels);
+} catch {
+  // Silently continue - not critical to response
+}
+
+// Comments on time zone sensitive logic
+function getJerusalemInfo(clock = createJerusalemClock()) {
+  // Uses Intl.DateTimeFormat with Asia/Jerusalem timezone
+```
 
 ## Function Design
 
-**Size:**
-- Keep each function focused on one responsibility.
-- Orchestration functions (like `handleStreamRequest`, `applyRequestControls`) delegate to focused sub-functions.
+**Size:** Functions typically 10-50 lines. Larger functions (80+ lines) break work into smaller helpers:
+- `http-handler.js` main handler: ~160 lines split across 15+ helper functions
+- `stream-route.js`: 290 lines with 10+ internal helpers
 
 **Parameters:**
-- Pass primitives and plain objects directly.
-- No implicit globals except module-level constants and the two module-level Maps in `stream-route.js` (in-flight deduplication).
+- Use object parameters for functions with multiple options:
+```javascript
+async function runAtomicSessionGate(input) {
+  const { redisEval, ip, nowMs = Date.now(), ...other } = input || {};
+}
+```
+- Provide sensible defaults via destructuring
+- Prefix options objects to clarify: `options.env`, `dependencies.redisCommand`, `injected.emitTelemetry`
 
 **Return Values:**
-- Return explicit JSON-serializable objects.
-- Use `{ handled, outcome }` for route handlers (see Handler Return Shape above).
-- Use `{ allowed, reason, ... }` for policy decisions.
-- Use `{ status, url, title }` or `{ status, cause }` for stream resolution results.
+- Return structured objects with clear properties: `{ allowed: true, reason: "admitted:new", rotatedIp: "", activeCount: 1 }`
+- Return null for "not found": `parseEpisodeShare(raw)` returns null for invalid JSON
+- Return empty arrays for empty results: `normalizeAllowedIps([])` returns `[]`
+- Async functions always return promises (even for void operations)
 
 ## Module Design
 
 **Exports:**
-- Named exports only: `module.exports = { fn1, fn2 }`.
-- Do not attach properties to exported interfaces after the fact.
+- Each module exports specific functions and constants, no default exports
+- Module.exports uses object literal: `module.exports = { func1, func2, constant }`
+- Private functions declared without export in same file
+- No private key convention (underscore prefix not used)
 
-**Import Direction:**
-- Follow `modules/BOUNDARIES.md` strictly:
-  - `routing` → `policy`, `integrations`, `analytics`, `presentation`, `observability`.
-  - `policy` → pure utilities only (no service clients).
-  - `integrations` → transport utilities only.
-  - `presentation` → no service client imports.
-  - Never: `integrations` → `presentation`, `policy` → `routing`, `presentation` → `integrations`.
+**Barrel Files:**
+- Single index file at `modules/index.js` documents module structure
+- Index is maintainer-only reference, not used by runtime code
+- Runtime imports go directly to specific modules: `require("./integrations/redis-client")`
+
+**Dependencies Injection:**
+- Functions accept `injected` or `options` parameter for dependencies
+- Allows test mocking and loose coupling:
+```javascript
+async function handleStreamRequest(input = {}, injected = {}) {
+  const { redisCommand, resolveEpisode, sendJson } = injected;
+  // Use injected deps, with sensible runtime defaults elsewhere
+}
+```
+- Called with `{ req, pathname, ...data }` as first param, dependencies as second
+
+**Singleton Pattern:**
+- Redis client created once at module load: `const redisClient = createRedisClient()`
+- Session/stream tracking kept in module-level Maps: `const inFlightStreamIntents = new Map()`
+- Logger instance cached: `let baseLogger; getBaseLogger()` returns cached instance
+
+## Async/Await
+
+**Patterns:**
+- All async operations use async/await, no Promise.then() chains (except setup)
+- Try/catch for error handling in async functions
+- Timeout handling via `AbortSignal.timeout(ms)` in fetch calls
+- Concurrent operations with `Promise.all()` when multiple independent ops needed
+
+**Bounded Execution:**
+- `executeBoundedDependency()` wraps async calls with timeout + retry budget
+- Retry logic: maximum 2 attempts, exponential backoff with jitter
+- Elapsed time tracking: `const elapsed = Date.now() - startedAt`
+
+## Testing Conventions in Source
+
+**Test Data Setup:**
+- Fixed test constants at module load: `const NOW_MS = 1_700_000_000_000`
+- Mocking via dependency injection: `createSessionGateRedisEval({ initialSessions })`
+- Environment variable setup in helpers: `setRedisEnv()`
+
+**Constants Organization:**
+- Defaults bundled in objects: `const DEFAULTS = Object.freeze({ ... })`
+- Constants never mutated - use `Object.freeze()` for config objects
+- Separation: code defaults vs. parameter defaults
 
 ---
 
-*Convention analysis: 2026-02-25*
+*Convention analysis: 2026-02-28*

@@ -1,245 +1,223 @@
-# Architecture Research
+# Architecture Research — Server A → D Integration
 
-**Domain:** Stremio addon backend service (serverless stream resolver)
-**Researched:** 2026-02-21
-**Confidence:** HIGH
+**Domain:** Serverless Stremio addon with external resolution middleware
+**Researched:** 2026-02-28
+**Based on:** Direct codebase analysis of all relevant source files
 
-## Standard Architecture
-
-### System Overview
-
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         HTTP Transport (Serverless)                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐  ┌────────────────┐  ┌─────────────────────────────┐  │
-│  │ Request Router  │  │ Route Guards   │  │ Stremio Protocol Adapter    │  │
-│  │ (path dispatch) │  │ (auth + CORS)  │  │ (manifest/catalog fallback) │  │
-│  └────────┬────────┘  └───────┬────────┘  └──────────────┬──────────────┘  │
-├───────────┴────────────────────┴──────────────────────────┴─────────────────┤
-│                    Stream Application Layer                                  │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │ Policy Engine  │  │ Stream Service  │  │ Admin/Health Service        │  │
-│  │ (admission)    │  │ (resolve+format)│  │ (diagnostics summaries)     │  │
-│  └────────┬───────┘  └────────┬────────┘  └──────────────┬──────────────┘  │
-├───────────┴────────────────────┴──────────────────────────┴─────────────────┤
-│                     Integration + Telemetry Layer                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────────────┐ │
-│  │ Redis Gateway  │  │ Broker Client  │  │ Observability Sink            │ │
-│  │ (state/cache)  │  │ (episode->URL) │  │ (structured events+metrics)   │ │
-│  └────────────────┘  └────────────────┘  └──────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Component Responsibilities
-
-| Component | Responsibility | Typical Implementation |
-|-----------|----------------|------------------------|
-| `transport/router` | Parse request, route by path, map errors to protocol-safe responses | Thin module used by `serverless.js` entrypoint |
-| `transport/guards` | Enforce admin auth, route-specific CORS, trusted client IP extraction | Middleware-style pure functions |
-| `application/policy-engine` | Slot/session checks, time-window policy, rejection reasons | Policy service returning typed allow/deny decision |
-| `application/stream-service` | Stream request orchestration, cache lookup, broker resolve, stream payload formatting | Stateless service composed from policy + integrations |
-| `application/admin-service` | Health/quarantine data aggregation with redaction | JSON-first handlers (HTML optional and escaped) |
-| `integrations/redis-gateway` | Command batching, key naming, TTL behavior, retries/timeouts | Single module owning Redis REST semantics |
-| `integrations/broker-client` | Resolve episode to HTTPS URL with timeout, validation, error mapping | Fetch wrapper with abort + typed failures |
-| `observability/telemetry` | Emit structured logs, counters, latency, correlation IDs | Event writer to Redis and stdout JSON fallback |
-
-## Recommended Project Structure
-
-```text
-src/
-├── entry/
-│   └── serverless.js            # Runtime adapter; compose router/services only
-├── transport/
-│   ├── router.js                # Route table + handler dispatch
-│   ├── guards.js                # Admin auth, CORS, IP trust policy
-│   └── response.js              # JSON + Stremio-safe response helpers
-├── application/
-│   ├── stream-service.js        # Main stream flow orchestration
-│   ├── policy-engine.js         # Admission policy decisions
-│   └── admin-service.js         # Health/quarantine summary endpoints
-├── domain/
-│   ├── stremio-addon.js         # Manifest/catalog/stream contract wrappers
-│   └── stream-model.js          # Stream DTO validation/normalization
-├── integrations/
-│   ├── redis-gateway.js         # Redis REST client + key operations
-│   └── broker-client.js         # Broker resolve API client
-├── observability/
-│   ├── telemetry.js             # Structured event emitters
-│   └── metrics.js               # Counters/latency utilities
-└── config/
-    └── env.js                   # Centralized env parsing and defaults
-```
-
-### Structure Rationale
-
-- **`entry/` and `transport/`:** Keeps serverless runtime specifics isolated so addon contract remains stable while internals evolve.
-- **`application/`:** Encapsulates use-case orchestration (stream route, policy, admin) without Redis/fetch details.
-- **`domain/`:** Preserves Stremio compatibility as a stable boundary and limits protocol changes to one area.
-- **`integrations/`:** Centralizes failure-prone external calls (Redis and broker) for timeout/retry/security hardening.
-- **`observability/`:** Makes telemetry a first-class dependency instead of ad-hoc `catch` behavior.
-
-## Architectural Patterns
-
-### Pattern 1: Intercept-and-Delegate Routing
-
-**What:** Intercept only custom high-risk routes (`/stream/*`, `/health`, `/quarantine`), delegate other Stremio routes to SDK router.
-**When to use:** Maintaining strict addon compatibility while adding custom policy/security behavior.
-**Trade-offs:** Preserves compatibility and reduces regression risk, but requires clear route ownership to avoid double handling.
-
-**Example:**
-```javascript
-async function handle(req, res) {
-  const route = matchRoute(req.url)
-  if (route.type === "stream") return streamHandler(req, res)
-  if (route.type === "admin") return adminHandler(req, res)
-  return stremioRouter(req, res)
-}
-```
-
-### Pattern 2: Policy Decision Object
-
-**What:** Policy layer returns typed decisions (`ALLOW`, `DENY_SLOT`, `DENY_WINDOW`, `DEGRADED_ALLOW`) plus metadata.
-**When to use:** Security and admission policies must be auditable and observable.
-**Trade-offs:** More explicit behavior and logs, but small upfront refactor from inline conditionals.
-
-**Example:**
-```javascript
-const decision = await policyEngine.evaluate({ ip, path, now })
-if (!decision.allow) return sendBlockedStream(res, decision.reason)
-```
-
-### Pattern 3: Integration Adapters with Bounded Calls
-
-**What:** All network calls use adapters with timeout, validation, and normalized error codes.
-**When to use:** Serverless systems with external dependencies and strict latency budgets.
-**Trade-offs:** Slightly more boilerplate, but significantly simpler incident triage and fallback control.
-
-## Data Flow
-
-### Request Flow
-
-```text
-Stremio client request
-    ↓
-transport/router -> transport/guards
-    ↓
-application/stream-service
-    ↓
-application/policy-engine -> integrations/redis-gateway
-    ↓ allow
-integrations/redis-gateway (cache lookup)
-    ↓ miss
-integrations/broker-client (resolve)
-    ↓
-domain/stream-model normalize + validate
-    ↓
-transport/response (Stremio stream JSON)
-    ↓
-observability/telemetry emits outcome + latency + reason codes
-```
-
-### State Management
-
-```text
-Redis as single shared state:
-- admission/session keys (policy)
-- short-lived stream URL cache
-- telemetry counters/event ring
-
-No in-memory required state in runtime process.
-```
-
-### Key Data Flows
-
-1. **Secure stream routing flow:** Guard trusted IP and route policy before broker calls; never resolve stream for denied requests.
-2. **Policy enforcement flow:** Policy engine reads/writes session windows atomically (or batched) and returns machine-readable denial reason.
-3. **Observability flow:** Every stream decision emits structured event (`request_id`, `episode_id`, `policy_result`, `dependency_status`, `latency_ms`).
-4. **Admin diagnostics flow:** Protected endpoint reads redacted telemetry aggregates, not raw unescaped event payloads.
-
-## Incremental Build Order
-
-1. **Stabilize boundaries without behavior change**
-   - Extract `redis-gateway`, `broker-client`, and response helpers from monolith.
-   - Keep `serverless.js` route behavior and payloads identical.
-   - Success criteria: zero contract change for manifest/catalog/stream responses.
-
-2. **Isolate policy engine and decision codes**
-   - Move slot/window/IP logic into `policy-engine` with typed decisions.
-   - Add trusted-forwarded-header rules and explicit deny reasons.
-   - Success criteria: same allow/deny outcomes plus reliable attribution and logs.
-
-3. **Split stream and admin application services**
-   - Create `stream-service` and `admin-service`; reduce entrypoint to composition.
-   - Convert quarantine/health internals to JSON-first service outputs.
-   - Success criteria: simpler route ownership and reduced blast radius.
-
-4. **Add secure admin access and output hardening**
-   - Require auth on admin routes, escape/sanitize rendered fields, tighten CORS per route.
-   - Success criteria: operational data no longer public; injection vector closed.
-
-5. **Bake in observability primitives**
-   - Emit structured events and latency metrics at transport/app/integration boundaries.
-   - Add correlation IDs across Redis and broker calls.
-   - Success criteria: failures diagnosable without reading fallback behavior in code.
-
-6. **Optimize hot path only after visibility exists**
-   - Batch Redis operations, set explicit timeouts/retries, tune cache TTL and key design.
-   - Success criteria: lower p95 latency and fewer dependency-amplified failures.
-
-## Scaling Considerations
-
-| Scale | Architecture Adjustments |
-|-------|--------------------------|
-| 0-1k users | Keep single serverless function; focus on policy correctness, auth, and structured telemetry. |
-| 1k-100k users | Batch Redis commands, enforce dependency timeouts, isolate admin traffic from stream hot path. |
-| 100k+ users | Split admin/telemetry ingestion from stream handler and consider dedicated worker pipelines for analytics. |
-
-### Scaling Priorities
-
-1. **First bottleneck:** Sequential Redis REST calls in policy and stream path; address via batched operations and reduced round-trips.
-2. **Second bottleneck:** Broker and Redis long-tail latency; address via strict timeouts, bounded retries, and clearer degraded-mode responses.
-
-## Anti-Patterns
-
-### Anti-Pattern 1: God Handler Entrypoint
-
-**What people do:** Keep routing, policy, integrations, HTML, and telemetry in one file/function.
-**Why it's wrong:** Small edits create high regression risk and obscure failure ownership.
-**Do this instead:** Maintain thin entrypoint composition and move each concern to explicit module boundaries.
-
-### Anti-Pattern 2: Silent Fallbacks Without Reason Codes
-
-**What people do:** Return empty streams on exceptions with no structured event.
-**Why it's wrong:** Production incidents become non-reproducible and policy mistakes look like content misses.
-**Do this instead:** Emit typed failure reason and correlation ID while still returning protocol-safe fallback.
+---
 
 ## Integration Points
 
-### External Services
+D client plugs into the existing integration layer at a single, well-defined seam. Two files currently own the broker dependency; both must be updated.
 
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| Redis REST (Upstash/Vercel KV) | Single gateway adapter with command wrappers, timeouts, and optional batching | Primary state + telemetry store; protect credentials and validate response schema |
-| Broker resolve API | Dedicated client with HTTPS-only output validation and abort timeout | Treat as unreliable dependency; map errors to safe fallback + observable code |
-| `stremio-addon-sdk` | Adapter boundary in `domain/stremio-addon.js` | Preserve manifest/catalog/stream compatibility during all refactors |
+### `modules/integrations/d-client.js` (NEW)
 
-### Internal Boundaries
+Primary new file. Replaces `broker-client.js` as the resolution transport. Must expose a factory `createDClient(options)` returning:
 
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| `transport/router` ↔ `application/*` | Direct function calls with request context DTO | Transport should not import Redis/broker directly |
-| `application/*` ↔ `integrations/*` | Adapter interface (`get/set`, `resolveEpisode`) | Keeps policy and stream logic testable with fakes |
-| `application/*` ↔ `observability/*` | Event emit calls with shared schema | Consistent telemetry schema enables low-ops triage |
+- `resolveEpisode(episodeId)` — replaces `brokerClient.resolveEpisode`; same calling contract used by `stream-route.js`
+- `forwardUserAgent(userAgent, episodeId)` — fire-and-forget UA shipping
+- `shipFailureLogs(events)` — fire-and-forget nightly log shipping
 
-## Sources
+Factory accepts: `options.baseUrl`, `options.fetchImpl`, `options.executeBoundedDependency`, `options.env` — identical pattern to `broker-client.js` lines 133–140.
 
-- `C:/Users/enggy/Documents/GitHub/add-jipi/.planning/PROJECT.md`
-- `C:/Users/enggy/Documents/GitHub/add-jipi/.planning/codebase/ARCHITECTURE.md`
-- `C:/Users/enggy/Documents/GitHub/add-jipi/.planning/codebase/CONCERNS.md`
+When `D_BASE_URL` is unset, `resolveEpisode` throws immediately (same guard as `broker-client.js` line 147–149). `forwardUserAgent` and `shipFailureLogs` silently no-op when `D_BASE_URL` is unset — they are side channels, never blockers.
+
+### `modules/routing/stream-route.js` (MODIFIED)
+
+Lines 105–120 define `resolveEpisodeResolver(injected)`. Currently falls through to `createBrokerClient`. Must be updated to fall through to `createDClient`. The internal calling contract — `injected.resolveEpisode(episodeId)` returning `{ url, title }` — does not change.
+
+`title` currently comes from `cleanTitle(resolvedFilename)` inside `broker-client.js`. After migration, `title` comes directly from D's response. `cleanTitle` and `resolveBrokerFilename` become dead code.
+
+UA forwarding called here after successful resolution, fire-and-forget (same pattern as `writeSessionView` best-effort paths, lines 130–146). Not awaited in critical path.
+
+### `addon.js` (MODIFIED)
+
+- Line 2: `require("./modules/integrations/broker-client")` → `require("./modules/integrations/d-client")`
+- Line 18: `createBrokerClient()` → `createDClient()`
+- Line 38: `brokerClient.resolveEpisode(episodeId)` → `dClient.resolveEpisode(episodeId)`
+
+Second consumer of broker client. Uses only `resolveEpisode`. Stremio SDK stream handler in `addon.js` lines 41–67 uses the resolved `title` directly (line 57) — continues to work unchanged because D returns `title` natively.
+
+### `modules/routing/operator-routes.js` (MODIFIED — nightly log shipping)
+
+Log shipping triggers during the nightly window alongside the existing rollup. `handleOperatorRoute` handles `/operator/rollup/nightly` at lines 192–211. A new path `/operator/ship/logs` (or a flag on the existing nightly trigger) calls `dClient.shipFailureLogs(events)` by reading `quarantine:events` from Redis and POSTing to D's log collection endpoint. Fire-and-forget: failure swallowed and logged, never surfaced to operator response.
+
+### `modules/integrations/broker-client.js` (DEPRECATED, not deleted yet)
+
+Kept until D client is validated in production. Referenced in two places: `addon.js` line 2 and `stream-route.js` line 1. After D client is wired in, both references are removed. File remains as reference implementation until milestone closes.
 
 ---
-*Architecture research for: Stremio addon backend service*
-*Researched: 2026-02-21*
+
+## Component Boundaries
+
+### What A owns and keeps doing
+
+- Time window policy evaluation (`modules/policy/time-window.js`)
+- Session capacity gate (`modules/policy/session-gate.js`)
+- Per-episode Redis share key management (`episode:share:*` in `stream-route.js`)
+- Hourly analytics tracking (`modules/analytics/hourly-tracker.js`)
+- Session view snapshots (`modules/analytics/session-view.js`)
+- Nightly rollup of hourly buckets into daily summaries (`modules/analytics/nightly-rollup.js`)
+- Stremio protocol compliance (manifest, catalog, stream payload format)
+- CORS, correlation IDs, operator authentication
+- Reliability counters and degraded stream policy
+
+### What A delegates to D
+
+- Episode resolution: A sends episodeId → D returns `{ url, title }`
+- All DB writes, cache population, B/C orchestration — fully opaque to A
+- Episode title extraction from filename — D reads the filename, returns clean `title`; A stops parsing filenames
+- User-Agent storage — A forwards raw UA header as side-channel POST
+- Centralized failure log collection — A ships `quarantine:events` to D during nightly window
+
+### The boundary rule
+
+A must never call Server B or C directly. All resolution goes through D's single `/resolve` endpoint. A must not know about B's or C's existence. Any logic that inspects broker URLs, parses filenames, or applies B-specific URL patterns must be removed from A.
+
+---
+
+## Data Flow
+
+### Primary path: stream resolution
+
+```
+Stremio client
+  → GET /stream/series/{episodeId}.json
+  → createHttpHandler (modules/routing/http-handler.js)
+    → applyRequestControls: time-window + session gate
+    → handleStreamRequest (modules/routing/stream-route.js)
+      → check Redis episode:share:{episodeId} (cache hit path)
+      → cache miss: resolveEpisodeResolver(injected) → dClient.resolveEpisode(episodeId)
+        → POST /api/resolve to D_BASE_URL
+        → D returns { url, title }
+      → validate url starts with https://
+      → write episode:share key to Redis
+      → upsertSessionView (best-effort)
+      → trackHourlyEvent (best-effort)
+      → sendJson: { streams: [formatStream(title, url)] }
+  ← 200 JSON to Stremio client
+```
+
+### UA forwarding path (fire-and-forget side channel)
+
+```
+handleStreamRequest (after resolveEpisode succeeds, before sendJson)
+  → dClient.forwardUserAgent(userAgent, episodeId)   [not awaited]
+    → POST /api/ua to D_BASE_URL
+    → body: { userAgent, episodeId, timestamp }
+    → on any error: swallow silently, no retry
+    → D_BASE_URL unset: no-op immediately
+```
+
+### Log shipping path (nightly side channel)
+
+```
+Nightly window trigger (/operator/ship/logs or /operator/rollup/nightly)
+  → read quarantine:events from Redis (LRANGE quarantine:events 0 -1)
+  → dClient.shipFailureLogs(events)   [awaited but errors swallowed]
+    → POST /api/logs to D_BASE_URL
+    → body: { events: [...], shippedAt, source: "server-a" }
+    → on error: log at WARN, do not throw, do not block rollup
+    → D_BASE_URL unset: no-op, return immediately
+```
+
+---
+
+## Suggested Build Order
+
+**Phase 1: Define D client module (stub-first)**
+Build `modules/integrations/d-client.js`. All three functions stub gracefully when `D_BASE_URL` is unset. Write contract tests for stub behavior. Nothing in request path changes yet.
+
+**Phase 2: Wire resolveEpisode into the resolution path**
+Update `resolveEpisodeResolver` in `stream-route.js` to fall through to `createDClient`. Update `addon.js`. Remove title extraction from broker-specific helpers. Update existing stream contract tests to inject mock D client.
+
+**Phase 3: Add UA forwarding**
+Add fire-and-forget `forwardUserAgent` call in `stream-route.js` success branch. Confirm it never propagates errors.
+
+**Phase 4: Add nightly log shipping**
+Add `shipFailureLogs` trigger in `operator-routes.js`. Test that shipping failure does not block rollup.
+
+**Phase 5: Deprecate broker-client.js**
+After D is live and stable in production, remove all `broker-client.js` references and delete the file.
+
+---
+
+## Module Structure Changes
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `modules/integrations/d-client.js` | D service client: resolveEpisode, forwardUserAgent, shipFailureLogs |
+| `tests/contract-d-client.test.js` | Contract tests: stub behavior, error handling, fire-and-forget isolation |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `addon.js` | Replace `createBrokerClient` import/instantiation with `createDClient` |
+| `modules/routing/stream-route.js` | `resolveEpisodeResolver` → `createDClient`; add UA forwarding call; remove title extraction |
+| `modules/routing/operator-routes.js` | Add log shipping trigger; call `dClient.shipFailureLogs` |
+| `modules/routing/http-handler.js` | Pass `D_BASE_URL` into dependency builder; add env var parsing |
+
+### Deprecated (not deleted this milestone)
+
+| File | Status |
+|------|--------|
+| `modules/integrations/broker-client.js` | Call sites removed in Phase 2; file deleted in Phase 5 |
+
+---
+
+## Contract Definition
+
+### POST /api/resolve
+
+```
+Request:  { "episodeId": "tt0388629:1:1" }
+
+Success 200:
+  { "url": "https://...", "title": "Romance Dawn" }
+
+Errors:
+  404 → degraded stream (empty)
+  503 → degraded stream (fallback video)
+  408 / 429 / 5xx → transient; retry once with jitter
+
+Timeout: 60s total, 60s per attempt
+```
+
+`url` must be HTTPS. `title` used verbatim in `formatStream(title, url)` — no local transformation. A validates `url.startsWith("https://")` and emits `validation_invalid_stream_url` on failure.
+
+### POST /api/ua
+
+```
+Request:  { "userAgent": "...", "episodeId": "tt0388629:1:1", "timestamp": "ISO8601" }
+Response: any 2xx
+Errors:   silently swallowed, no retry, no effect on stream response
+Unset D_BASE_URL: call never made
+```
+
+### POST /api/logs
+
+```
+Request:
+  {
+    "source": "server-a",
+    "shippedAt": "ISO8601",
+    "events": [
+      { "ip": "1.2.3.4", "error": "...", "episodeId": "...", "time": "ISO8601" }
+    ]
+  }
+
+Response: any 2xx
+Errors:   logged at WARN, swallowed, nightly rollup continues
+Unset D_BASE_URL: call never made
+```
+
+### Failure classification
+
+D errors use `source: "broker"` for backwards compatibility with existing `DEGRADED_STREAM_POLICY` and reliability counter labels. A new `SOURCES.D = "d"` entry in `observability/events.js` is deferred to a future milestone after D is live.
+
+---
+
+*Analysis based on direct codebase reading: 2026-02-28*
