@@ -2,6 +2,7 @@ const {
   DEFAULT_DAILY_SUMMARY_KEY,
   writeDailySummary
 } = require("./daily-summary-store");
+const { buildUniqueHllKey } = require("./hourly-tracker");
 
 const DEFAULT_HOURLY_KEY = "analytics:hourly";
 const DEFAULT_LOCK_KEY = "daily:summary:rollup:lock";
@@ -152,6 +153,7 @@ async function runNightlyRollup(redisCommand, input = {}, options = {}) {
     const byBucket = parseHourlyFields(hourlyRaw);
     const dayPrefix = `${day}-`;
     const totalsByField = {};
+    let uniqueEstimateTotal = 0;
     let bucketsProcessed = 0;
     const dayFields = listFieldsForDay(hourlyRaw, day);
 
@@ -168,6 +170,18 @@ async function runNightlyRollup(redisCommand, input = {}, options = {}) {
 
       if (countedBucket) {
         bucketsProcessed += 1;
+      }
+
+      const uniqueFields = Object.prototype.hasOwnProperty.call(events || {}, "requests.total")
+        ? ["requests.total"]
+        : [];
+      for (const eventName of uniqueFields) {
+        const eventMetrics = events && events[eventName];
+        const count = Math.max(0, Number(eventMetrics && eventMetrics.count) || 0);
+        if (count <= 0) continue;
+        const uniqueKey = buildUniqueHllKey(bucket, eventName, { hourlyKey: hourlyKeyName });
+        const estimate = Math.max(0, Number(await redisCommand(["PFCOUNT", uniqueKey])) || 0);
+        uniqueEstimateTotal += estimate;
       }
     }
 
@@ -188,7 +202,7 @@ async function runNightlyRollup(redisCommand, input = {}, options = {}) {
       source: "nightly_rollup",
       bucketsProcessed,
       totalsByField,
-      uniqueEstimateTotal: 0,
+      uniqueEstimateTotal,
       rolledUpAt: new Date().toISOString()
     };
 
@@ -223,7 +237,7 @@ async function runNightlyRollup(redisCommand, input = {}, options = {}) {
       status: "ok",
       day,
       bucketsProcessed,
-      uniqueEstimateTotal: 0
+      uniqueEstimateTotal
     };
   } finally {
     await redisCommand(["DEL", lockKey]);

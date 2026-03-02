@@ -2,11 +2,34 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   createMockRedisFetch,
+  createRedisRuntime,
   loadAddon,
   loadServerless,
   requestWithHandler,
   setRedisEnv
 } = require("./helpers/runtime-fixtures");
+const { resetBaseLoggerForTest, setBaseLoggerForTest } = require("../observability/logger");
+
+function flushMicrotasks() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function createCaptureLogger(events = [], bindings = {}) {
+  return {
+    child(nextBindings = {}) {
+      return createCaptureLogger(events, { ...bindings, ...nextBindings });
+    },
+    info() {},
+    error() {},
+    warn(payload = {}, message = "") {
+      events.push({
+        ...bindings,
+        ...(payload || {}),
+        message: String(message || "")
+      });
+    }
+  };
+}
 
 async function request(pathname, options = {}) {
   const { mode = "allow", resolveEpisode } = options;
@@ -85,4 +108,139 @@ test("manifest and catalog stay available when stream slot gate is blocked", asy
   assert.equal(streamResponse.statusCode, 200);
   assert.deepEqual(streamResponse.body.streams, []);
   assert.equal(streamResponse.body.notice, "Temporary load. Try again in a few minutes.");
+});
+
+test("stream response completes before pending UA forwarding resolves", async () => {
+  setRedisEnv();
+  const redisRuntime = createRedisRuntime();
+  const originalFetch = global.fetch;
+  const originalDBaseUrl = process.env.D_BASE_URL;
+  let releaseUaForward;
+  const pendingUaForward = new Promise((resolve) => {
+    releaseUaForward = resolve;
+  });
+  let uaCallCount = 0;
+
+  global.fetch = async (url, options = {}) => {
+    if (String(url) === "https://d.example/api/ua") {
+      uaCallCount += 1;
+      return pendingUaForward;
+    }
+    return redisRuntime.fetch(url, options);
+  };
+  process.env.D_BASE_URL = "https://d.example";
+
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  addon.resolveEpisode = async () => ({
+    url: "https://cdn.example.com/onepiece-1-2.mp4",
+    title: "One Piece S1E2"
+  });
+
+  delete require.cache[require.resolve("../modules/routing/stream-route")];
+  const handler = loadServerless();
+
+  try {
+    const responsePromise = requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A2.json", {
+      ip: "203.0.113.1",
+      headers: {
+        "x-forwarded-for": "203.0.113.1",
+        "user-agent": "FR4-NonBlocking/1.0"
+      }
+    });
+    const raced = await Promise.race([
+      responsePromise,
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 250))
+    ]);
+
+    assert.notEqual(raced, "timeout");
+    assert.equal(raced.statusCode, 200);
+    assert.ok(Array.isArray(raced.body.streams));
+    assert.equal(raced.body.streams.length, 1);
+    assert.equal(raced.body.streams[0].title, "One Piece S1E2");
+
+    await flushMicrotasks();
+    assert.equal(uaCallCount, 1);
+    assert.equal(redisRuntime.state.strings.get("stats:ua_forward_error"), undefined);
+  } finally {
+    if (typeof releaseUaForward === "function") {
+      releaseUaForward({
+        ok: true,
+        status: 202,
+        async json() {
+          return {};
+        }
+      });
+      await flushMicrotasks();
+    }
+    global.fetch = originalFetch;
+    if (typeof originalDBaseUrl === "undefined") delete process.env.D_BASE_URL;
+    else process.env.D_BASE_URL = originalDBaseUrl;
+    addon.resolveEpisode = originalResolveEpisode;
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../modules/routing/stream-route")];
+  }
+});
+
+test("UA forwarding failure logs warn, increments ua_forward_error, and keeps stream payload stable", async () => {
+  setRedisEnv();
+  const redisRuntime = createRedisRuntime();
+  const originalFetch = global.fetch;
+  const originalDBaseUrl = process.env.D_BASE_URL;
+  const warningEvents = [];
+  setBaseLoggerForTest(createCaptureLogger(warningEvents));
+
+  global.fetch = async (url, options = {}) => {
+    if (String(url) === "https://d.example/api/ua") {
+      const error = new Error("ua forward transport failed");
+      error.code = "dependency_unavailable";
+      throw error;
+    }
+    return redisRuntime.fetch(url, options);
+  };
+  process.env.D_BASE_URL = "https://d.example";
+
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  addon.resolveEpisode = async () => ({
+    url: "https://cdn.example.com/onepiece-1-3.mp4",
+    title: "One Piece S1E3"
+  });
+
+  delete require.cache[require.resolve("../modules/routing/stream-route")];
+  const handler = loadServerless();
+
+  try {
+    const response = await requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A3.json", {
+      ip: "203.0.113.1",
+      headers: {
+        "x-forwarded-for": "203.0.113.1",
+        "user-agent": "FR4-Failure/1.0"
+      }
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.ok(Array.isArray(response.body.streams));
+    assert.equal(response.body.streams.length, 1);
+    assert.equal(response.body.streams[0].title, "One Piece S1E3");
+
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    const warning = warningEvents.find((entry) => entry.message === "ua_forward_failed");
+    assert.ok(warning);
+    assert.equal(warning.episodeId, "tt0388629:1:3");
+    assert.equal(warning.userAgent, "FR4-Failure/1.0");
+    assert.equal(warning.errorCode, "dependency_unavailable");
+
+    assert.equal(redisRuntime.state.strings.get("stats:ua_forward_error"), "1");
+  } finally {
+    resetBaseLoggerForTest();
+    global.fetch = originalFetch;
+    if (typeof originalDBaseUrl === "undefined") delete process.env.D_BASE_URL;
+    else process.env.D_BASE_URL = originalDBaseUrl;
+    addon.resolveEpisode = originalResolveEpisode;
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../modules/routing/stream-route")];
+  }
 });

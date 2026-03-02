@@ -473,7 +473,7 @@ async function createHttpHandler(req, res) {
               ...streamRouteDependencies,
               onStreamError: async ({ error, ip, episodeId }) => {
                 try {
-                  await redisCommand(["INCR", "stats:broker_error"]);
+                  await redisCommand(["INCR", "stats:d_error"]);
                 } catch {
                   // Best-effort metric path.
                 }
@@ -490,6 +490,13 @@ async function createHttpHandler(req, res) {
                   await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
                 } catch {
                   // Best-effort quarantine path.
+                }
+              },
+              onUaForwardError: async () => {
+                try {
+                  await redisCommand(["INCR", "stats:ua_forward_error"]);
+                } catch {
+                  // Best-effort metric path.
                 }
               }
             }

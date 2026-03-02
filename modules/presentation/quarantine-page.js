@@ -12,7 +12,7 @@ function renderQuarantinePage(input = {}) {
   const maxSessions = Number(input.maxSessions || 0);
   const activeCount = Number(input.activeCount || 0);
   const slotTaken = Number(input.slotTaken || 0);
-  const brokerErrors = Number(input.brokerErrors || 0);
+  const resolutionErrors = Number(input.resolutionErrors || 0);
 
   const events = eventsRaw.map((entry) => {
     try {
@@ -41,7 +41,7 @@ function renderQuarantinePage(input = {}) {
     <html>
       <body style="background:#1a1a1a;color:#eee;font-family:sans-serif;padding:2rem">
         <h2>Quarantine Events (Last 50)</h2>
-        <p><b>Stats:</b> Active Sessions: ${activeCount}/${maxSessions} | Slot Taken Blocks: ${slotTaken} | Broker Errors: ${brokerErrors}</p>
+        <p><b>Stats:</b> Active Sessions: ${activeCount}/${maxSessions} | Slot Taken Blocks: ${slotTaken} | Resolution Errors: ${resolutionErrors}</p>
         <table style="width:100%;border-collapse:collapse;background:#2a2a2a">
           <thead>
             <tr style="background:#333">

@@ -114,6 +114,9 @@ test("nightly rollup aggregates hourly hashes into one daily summary and cleans 
   await redis.command(["HSET", hourlyKey, `${h15}|stream.degraded|count`, "2"]);
   await redis.command(["HSET", hourlyKey, `${h14}|requests.total|first_seen`, "2099-01-01T14:00:00.000Z"]);
   await redis.command(["HSET", hourlyKey, `${h14}|requests.total|last_seen`, "2099-01-01T14:59:00.000Z"]);
+  await redis.command(["PFADD", `${hourlyKey}:unique:${h14}|requests.total`, "198.51.100.20"]);
+  await redis.command(["PFADD", `${hourlyKey}:unique:${h14}|requests.total`, "198.51.100.21"]);
+  await redis.command(["PFADD", `${hourlyKey}:unique:${h15}|requests.total`, "198.51.100.22"]);
 
   const first = await runNightlyRollup(redis.command, { day });
   assert.equal(first.status, "ok");
@@ -124,6 +127,7 @@ test("nightly rollup aggregates hourly hashes into one daily summary and cleans 
   assert.equal(daily.totalsByField["requests.total"], 15);
   assert.equal(daily.totalsByField["policy.admitted"], 8);
   assert.equal(daily.totalsByField["stream.degraded"], 2);
+  assert.ok(Number(daily.uniqueEstimateTotal) > 0);
 
   const remainingHourly = await redis.command(["HGETALL", hourlyKey]);
   assert.equal(remainingHourly.length, 0);

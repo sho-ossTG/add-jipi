@@ -13,6 +13,61 @@ const {
   readDailySummary
 } = require("../analytics/daily-summary-store");
 const { runNightlyRollup } = require("../analytics/nightly-rollup");
+const { getLogger } = require("../../observability/logger");
+
+const logger = getLogger({ component: "operator-routes" });
+
+function isValidDay(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return false;
+  }
+
+  const [yearRaw, monthRaw, dayRaw] = day.split("-");
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const dayOfMonth = Number(dayRaw);
+  const parsed = new Date(Date.UTC(year, month - 1, dayOfMonth));
+  return (
+    Number.isInteger(year) &&
+    Number.isInteger(month) &&
+    Number.isInteger(dayOfMonth) &&
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === dayOfMonth
+  );
+}
+
+function parsePendingDay(req) {
+  const reqUrl = new URL(req.url || "/operator/logs/pending", "http://localhost");
+  const day = String(reqUrl.searchParams.get("day") || "").trim();
+  if (!isValidDay(day)) {
+    return { valid: false, day: "" };
+  }
+  return { valid: true, day };
+}
+
+function parseEventEntry(raw) {
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function eventMatchesDay(event, day) {
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+  const time = event.time;
+  if (typeof time !== "string") {
+    return false;
+  }
+  return time.slice(0, 10) === day;
+}
 
 function parseHourlySnapshot(raw = [], bucket = "") {
   const currentHour = {};
@@ -211,6 +266,91 @@ async function handleOperatorRoute(input = {}, injected = {}) {
     }
   }
 
+  if (pathname === "/operator/logs/pending") {
+    const method = String((req && req.method) || "GET").toUpperCase();
+    if (method !== "GET" && method !== "DELETE") {
+      sendJson(req, res, 405, { error: "method_not_allowed" });
+      return {
+        handled: true,
+        outcome: { source: "policy", cause: "method_not_allowed", result: "failure" }
+      };
+    }
+
+    const pendingDay = parsePendingDay(req);
+    if (!pendingDay.valid) {
+      sendJson(req, res, 400, { error: "invalid_day" });
+      return {
+        handled: true,
+        outcome: { source: "policy", cause: "invalid_day", result: "failure" }
+      };
+    }
+
+    if (method === "GET") {
+      try {
+        if (typeof redisCommand !== "function") {
+          throw new Error("handleOperatorRoute requires injected.redisCommand for /operator/logs/pending");
+        }
+
+        const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
+        const events = Array.isArray(eventsRaw)
+          ? eventsRaw
+            .map((entry) => parseEventEntry(entry))
+            .filter((event) => eventMatchesDay(event, pendingDay.day))
+          : [];
+
+        logger.info({ day: pendingDay.day, eventCount: events.length }, "operator_logs_pending_read");
+        sendJson(req, res, 200, {
+          day: pendingDay.day,
+          events
+        });
+        return { handled: true, outcome: { source: "redis", cause: "success", result: "success" } };
+      } catch (error) {
+        logger.warn({ day: pendingDay.day, error: error && error.message }, "operator_logs_pending_read_failed");
+        sendJson(req, res, 503, { error: "dependency_unavailable" });
+        return {
+          handled: true,
+          outcome: { source: "redis", cause: "dependency_unavailable", result: "failure" }
+        };
+      }
+    }
+
+    try {
+      if (typeof redisCommand !== "function") {
+        throw new Error("handleOperatorRoute requires injected.redisCommand for /operator/logs/pending");
+      }
+
+      const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
+      const rawEntries = Array.isArray(eventsRaw) ? eventsRaw : [];
+      let removed = 0;
+
+      for (const rawEntry of rawEntries) {
+        const parsed = parseEventEntry(rawEntry);
+        if (!eventMatchesDay(parsed, pendingDay.day)) {
+          continue;
+        }
+        const removedRaw = await redisCommand(["LREM", "quarantine:events", "1", String(rawEntry)]);
+        const removedCount = Number(removedRaw);
+        if (Number.isFinite(removedCount) && removedCount > 0) {
+          removed += removedCount;
+        }
+      }
+
+      logger.info({ day: pendingDay.day, removed }, "operator_logs_pending_delete");
+      sendJson(req, res, 200, {
+        day: pendingDay.day,
+        removed
+      });
+      return { handled: true, outcome: { source: "redis", cause: "success", result: "success" } };
+    } catch (error) {
+      logger.warn({ day: pendingDay.day, error: error && error.message }, "operator_logs_pending_delete_failed");
+      sendJson(req, res, 503, { error: "dependency_unavailable" });
+      return {
+        handled: true,
+        outcome: { source: "redis", cause: "dependency_unavailable", result: "failure" }
+      };
+    }
+  }
+
   if (pathname === "/quarantine") {
     try {
       const redisCommand = injected.redisCommand;
@@ -220,14 +360,14 @@ async function handleOperatorRoute(input = {}, injected = {}) {
 
       const eventsRaw = await redisCommand(["LRANGE", "quarantine:events", "0", "-1"]);
       const slotTaken = await redisCommand(["GET", "stats:slot_taken"]) || 0;
-      const brokerErrors = await redisCommand(["GET", "stats:broker_error"]) || 0;
+      const resolutionErrors = await redisCommand(["GET", "stats:d_error"]) || 0;
       const activeCount = await redisCommand(["ZCARD", "system:active_sessions"]) || 0;
 
       const html = renderQuarantinePage({
         eventsRaw,
         activeCount,
         slotTaken,
-        brokerErrors,
+        resolutionErrors,
         maxSessions: injected.maxSessions
       });
 

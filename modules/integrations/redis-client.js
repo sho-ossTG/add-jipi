@@ -1,22 +1,10 @@
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 900;
 const DEFAULT_TOTAL_TIMEOUT_MS = 1800;
 const DEFAULT_RETRY_JITTER_MS = 120;
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function randomJitter(maxMs) {
-  return Math.floor(Math.random() * Math.max(1, maxMs));
-}
-
-function isTransientDependencyFailure(error) {
-  if (!error) return false;
-  const status = Number(error.statusCode || 0);
-  if (status === 408 || status === 429 || status >= 500) return true;
-  const code = String(error.code || "").toLowerCase();
-  return code === "aborterror" || code === "etimedout" || code === "ecanceled" || code === "econnreset";
-}
+const {
+  executeBoundedDependency: executeSharedBoundedDependency,
+  isTransientDependencyFailure
+} = require("./bounded-dependency");
 
 async function executeBoundedDependency(operation, options = {}) {
   const {
@@ -25,42 +13,11 @@ async function executeBoundedDependency(operation, options = {}) {
     jitterMs = DEFAULT_RETRY_JITTER_MS
   } = options;
 
-  const startedAt = Date.now();
-  let attempt = 0;
-  let lastError;
-
-  while (attempt < 2) {
-    const elapsed = Date.now() - startedAt;
-    const remaining = totalBudgetMs - elapsed;
-    if (remaining <= 0) {
-      const timeoutError = new Error("Dependency operation timed out");
-      timeoutError.code = "dependency_timeout";
-      throw timeoutError;
-    }
-
-    const timeout = Math.max(1, Math.min(attemptTimeoutMs, remaining));
-
-    try {
-      return await operation({ timeout });
-    } catch (error) {
-      lastError = error;
-      const canRetry = attempt === 0 && isTransientDependencyFailure(error);
-      if (!canRetry) break;
-
-      const postAttemptElapsed = Date.now() - startedAt;
-      const postAttemptRemaining = totalBudgetMs - postAttemptElapsed;
-      if (postAttemptRemaining <= 1) break;
-
-      const jitterDelay = Math.min(randomJitter(jitterMs), postAttemptRemaining - 1);
-      if (jitterDelay > 0) {
-        await sleep(jitterDelay);
-      }
-    }
-
-    attempt += 1;
-  }
-
-  throw lastError;
+  return executeSharedBoundedDependency(operation, {
+    attemptTimeoutMs,
+    totalBudgetMs,
+    jitterMs
+  });
 }
 
 function getRedisConfig(options = {}) {

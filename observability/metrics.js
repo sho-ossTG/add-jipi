@@ -6,7 +6,7 @@ const RELIABILITY_LAST_UPDATED_KEY = "stats:reliability:last_updated";
 const RELIABILITY_META_KEY = "stats:reliability:meta";
 
 const BOUNDED_DIMENSIONS = Object.freeze({
-  source: ["broker", "redis", "validation", "policy", "unknown"],
+  source: ["d", "redis", "validation", "policy", "unknown"],
   cause: [
     "success",
     "admitted",
@@ -45,16 +45,17 @@ function normalizeBoundedValue(dimension, value) {
     if (normalized.includes("auth_unconfigured")) return "operator_auth_unconfigured";
     if (normalized.includes("service_unavailable")) return "service_unavailable";
     if (normalized.includes("internal")) return "internal_error";
-    if (normalized.includes("unavailable") || normalized.includes("broker") || normalized.includes("redis")) {
+    if (normalized.includes("unavailable") || normalized.includes("redis")) {
       return "dependency_unavailable";
     }
   }
 
   if (dimension === "source") {
+    if (normalized === "d") return "d";
     if (normalized.includes("redis")) return "redis";
     if (normalized.includes("valid")) return "validation";
     if (normalized.includes("policy") || normalized.includes("operator")) return "policy";
-    if (normalized.includes("broker")) return "broker";
+    if (normalized.includes("broker")) return "d";
   }
 
   return fallback;

@@ -1,7 +1,7 @@
 const { getCorrelationId } = require("./context");
 
 const SOURCES = Object.freeze({
-  BROKER: "broker",
+  D: "d",
   REDIS: "redis",
   VALIDATION: "validation",
   POLICY: "policy"
@@ -45,7 +45,7 @@ function normalizeSource(sourceValue, causeValue) {
   if (source.includes("policy") || cause.includes("policy") || cause.includes("blocked") || cause.includes("capacity")) {
     return SOURCES.POLICY;
   }
-  return SOURCES.BROKER;
+  return SOURCES.D;
 }
 
 function classifyFailure(input = {}) {
@@ -75,8 +75,8 @@ function classifyFailure(input = {}) {
     return { source: SOURCES.REDIS, cause: code || "dependency_unavailable" };
   }
 
-  if (code.startsWith("broker_") || code === "econnreset" || code === "enotfound") {
-    return { source: SOURCES.BROKER, cause: code || "dependency_unavailable" };
+  if (code === "econnreset" || code === "enotfound" || code.endsWith("_http_error")) {
+    return { source: normalizeSource(candidate.source, code), cause: "dependency_unavailable" };
   }
 
   if (code.startsWith("policy_") || code.startsWith("operator_")) {

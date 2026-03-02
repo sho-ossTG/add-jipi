@@ -3,10 +3,10 @@ const assert = require("node:assert/strict");
 
 const { applyRequestControls } = require("../modules/routing/request-controls");
 
-test("shutdown window pauses hourly writes and triggers nightly rollup for previous day", async () => {
+test("shutdown window still tracks blocked policy analytics and triggers nightly rollup for previous day", async () => {
   const calls = {
     rollup: [],
-    hourly: 0
+    hourly: []
   };
 
   async function redisCommand(parts = []) {
@@ -25,6 +25,7 @@ test("shutdown window pauses hourly writes and triggers nightly rollup for previ
     {
       isStremioRoute: () => true,
       redisCommand,
+      getTrustedClientIp: (request) => request && request.socket && request.socket.remoteAddress,
       timeWindow: {
         getJerusalemInfo: () => ({ hour: 2, dateStr: "2099-01-02" }),
         isWithinShutdownWindow: () => true
@@ -33,8 +34,8 @@ test("shutdown window pauses hourly writes and triggers nightly rollup for previ
         calls.rollup.push(input.day);
         return { status: "ok", day: input.day };
       },
-      trackHourlyEvent: async () => {
-        calls.hourly += 1;
+      trackHourlyEvent: async (_redisCommand, payload = {}) => {
+        calls.hourly.push(payload);
       }
     }
   );
@@ -42,5 +43,11 @@ test("shutdown window pauses hourly writes and triggers nightly rollup for previ
   assert.equal(result.allowed, false);
   assert.equal(result.reason, "blocked:shutdown_window");
   assert.deepEqual(calls.rollup, ["2099-01-01"]);
-  assert.equal(calls.hourly, 0);
+  assert.equal(calls.hourly.length, 1);
+  assert.deepEqual(calls.hourly[0].fields, [
+    "requests.total",
+    "policy.blocked",
+    "policy.blocked:shutdown_window"
+  ]);
+  assert.equal(calls.hourly[0].uniqueId, "198.51.100.1");
 });

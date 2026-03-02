@@ -105,8 +105,16 @@ async function applyRequestControls(input = {}, injected = {}) {
     }
   }
 
+  const getTrustedClientIp = injected.getTrustedClientIp;
+  const ip = typeof getTrustedClientIp === "function" ? getTrustedClientIp(req) : "unknown";
+
   if (isWithinShutdownWindow(info, injected.shutdownWindow || {})) {
     await runNightlyMaintenance();
+    await trackPolicyEvent([
+      "requests.total",
+      "policy.blocked",
+      "policy.blocked:shutdown_window"
+    ], ip);
     if (typeof injected.emitTelemetry === "function") {
       const classifyFailure = injected.classifyFailure || ((value) => ({ source: "policy", cause: value.reason || "blocked:shutdown_window" }));
       injected.emitTelemetry(injected.events && injected.events.POLICY_DECISION, {
@@ -128,9 +136,6 @@ async function applyRequestControls(input = {}, injected = {}) {
       await redisCommand(["SET", resetKey, "1", "EX", resetTtlSec]);
     }
   }
-
-  const getTrustedClientIp = injected.getTrustedClientIp;
-  const ip = typeof getTrustedClientIp === "function" ? getTrustedClientIp(req) : "unknown";
 
   const runSessionGate =
     typeof injected.runSessionGate === "function"

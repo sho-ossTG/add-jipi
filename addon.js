@@ -1,5 +1,5 @@
 const { addonBuilder } = require("stremio-addon-sdk");
-const { createBrokerClient } = require("./modules/integrations/broker-client");
+const { createDClient } = require("./modules/integrations/d-client");
 
 const IMDB_ID = "tt0388629";
 
@@ -15,7 +15,7 @@ const manifest = {
 };
 
 const builder = new addonBuilder(manifest);
-const brokerClient = createBrokerClient();
+const dClient = createDClient();
 
 builder.defineCatalogHandler(async (args) => {
   if (args.type !== "series" || args.id !== "onepiece_catalog") {
@@ -35,7 +35,7 @@ builder.defineCatalogHandler(async (args) => {
 });
 
 async function resolveEpisode(episodeId) {
-  return brokerClient.resolveEpisode(episodeId);
+  return dClient.resolveEpisode(episodeId);
 }
 
 builder.defineStreamHandler(async (args) => {

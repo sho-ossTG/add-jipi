@@ -14,7 +14,7 @@ function resolveFailureClassification(causeInput, injected) {
     if (typeof causeInput === "string") {
       return { source: "policy", cause: causeInput };
     }
-    return { source: "broker", cause: "dependency_unavailable" };
+    return { source: "d", cause: "dependency_unavailable" };
   }
 
   if (typeof causeInput === "string") {

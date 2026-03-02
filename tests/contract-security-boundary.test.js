@@ -102,6 +102,21 @@ function createRedisMock(options = {}) {
     if (op === "ZCARD") result = 1;
     if (op === "ZREMRANGEBYSCORE") result = 0;
     if (op === "LRANGE") result = quarantineEvents.map((event) => JSON.stringify(event));
+    if (op === "LREM") {
+      const count = Number(command[2] || 0);
+      const value = String(command[3] || "");
+      const maxRemovals = count === 0 ? Number.POSITIVE_INFINITY : Math.max(count, 0);
+      let removed = 0;
+      for (let index = 0; index < quarantineEvents.length && removed < maxRemovals; index += 1) {
+        if (JSON.stringify(quarantineEvents[index]) !== value) {
+          continue;
+        }
+        quarantineEvents.splice(index, 1);
+        removed += 1;
+        index -= 1;
+      }
+      result = removed;
+    }
     if (op === "HINCRBY") {
       const hash = hashes.get(String(key || "")) || new Map();
       const field = String(command[2] || "");
@@ -218,6 +233,16 @@ test("operator diagnostics routes deny unauthorized requests", async () => {
   const operatorMetrics = await request("/operator/metrics");
   assert.equal(operatorMetrics.statusCode, 401);
   assert.deepEqual(JSON.parse(operatorMetrics.body), { error: "operator_token_required" });
+
+  const logsPendingRead = await request("/operator/logs/pending?day=2099-01-01");
+  assert.equal(logsPendingRead.statusCode, 401);
+  assert.deepEqual(JSON.parse(logsPendingRead.body), { error: "operator_token_required" });
+
+  const logsPendingDelete = await request("/operator/logs/pending?day=2099-01-01", {
+    method: "DELETE"
+  });
+  assert.equal(logsPendingDelete.statusCode, 401);
+  assert.deepEqual(JSON.parse(logsPendingDelete.body), { error: "operator_token_required" });
 });
 
 test("operator diagnostics routes allow authorized requests", async () => {
@@ -283,6 +308,30 @@ test("operator diagnostics routes allow authorized requests", async () => {
   assert.equal(rollupResponse.statusCode, 200);
   const rollupPayload = JSON.parse(rollupResponse.body);
   assert.ok(["ok", "skipped"].includes(rollupPayload.status));
+
+  const logsPendingRead = await request("/operator/logs/pending?day=2099-01-01", {
+    headers: {
+      authorization: "Bearer top-secret"
+    }
+  });
+  assert.equal(logsPendingRead.statusCode, 200);
+  const logsPendingReadPayload = JSON.parse(logsPendingRead.body);
+  assert.equal(logsPendingReadPayload.day, "2099-01-01");
+  assert.equal(Array.isArray(logsPendingReadPayload.events), true);
+  assert.equal(logsPendingReadPayload.events.length, 1);
+  assert.equal(logsPendingReadPayload.events[0].episodeId, "tt0388629:1:1");
+
+  const logsPendingDelete = await request("/operator/logs/pending?day=2099-01-01", {
+    method: "DELETE",
+    headers: {
+      authorization: "Bearer top-secret"
+    }
+  });
+  assert.equal(logsPendingDelete.statusCode, 200);
+  assert.deepEqual(JSON.parse(logsPendingDelete.body), {
+    day: "2099-01-01",
+    removed: 1
+  });
 });
 
 test("trusted attribution ignores spoofed forwarded header", async () => {

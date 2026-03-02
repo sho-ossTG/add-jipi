@@ -24,6 +24,12 @@ function normalizeFields(fields = []) {
     .slice(0, 20);
 }
 
+function buildUniqueHllKey(bucket, field, options = {}) {
+  const baseKey = hourlyKey(bucket, options);
+  const prefix = String(options.uniqueKeyPrefix || `${baseKey}:unique`).trim() || `${baseKey}:unique`;
+  return `${prefix}:${bucket}|${field}`;
+}
+
 async function trackHourlyEvent(redisCommand, input = {}, options = {}) {
   if (typeof redisCommand !== "function") {
     throw new Error("trackHourlyEvent requires redisCommand function");
@@ -32,6 +38,8 @@ async function trackHourlyEvent(redisCommand, input = {}, options = {}) {
   const bucket = toHourBucket(input);
   const key = hourlyKey(bucket, options);
   const fields = normalizeFields(input.fields);
+  const uniqueId = String(input.uniqueId || "").trim();
+  const ttlSec = Math.max(0, Number(input.ttlSec || options.ttlSec || 0) || 0);
   const nowIso = new Date(Number(input.nowMs || Date.now())).toISOString();
 
   if (input.pauseWrites) {
@@ -42,6 +50,7 @@ async function trackHourlyEvent(redisCommand, input = {}, options = {}) {
     return { key, bucket, tracked: 0 };
   }
 
+  let uniqueTracked = false;
   for (const field of fields) {
     const countField = `${bucket}|${field}|count`;
     const firstSeenField = `${bucket}|${field}|first_seen`;
@@ -50,18 +59,28 @@ async function trackHourlyEvent(redisCommand, input = {}, options = {}) {
     await redisCommand(["HINCRBY", key, countField, "1"]);
     await redisCommand(["HSETNX", key, firstSeenField, nowIso]);
     await redisCommand(["HSET", key, lastSeenField, nowIso]);
+
+    if (uniqueId) {
+      const uniqueKey = buildUniqueHllKey(bucket, field, options);
+      await redisCommand(["PFADD", uniqueKey, uniqueId]);
+      if (ttlSec > 0) {
+        await redisCommand(["EXPIRE", uniqueKey, String(Math.floor(ttlSec))]);
+      }
+      uniqueTracked = true;
+    }
   }
 
   return {
     key,
     bucket,
     tracked: fields.length,
-    uniqueTracked: false
+    uniqueTracked
   };
 }
 
 module.exports = {
   toHourBucket,
   hourlyKey,
+  buildUniqueHllKey,
   trackHourlyEvent
 };

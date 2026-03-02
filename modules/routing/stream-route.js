@@ -1,6 +1,7 @@
-const { createBrokerClient } = require("../integrations/broker-client");
+const { createDClient } = require("../integrations/d-client");
 const defaultStreamPayloads = require("../presentation/stream-payloads");
 const { upsertSessionView } = require("../analytics/session-view");
+const { getLogger } = require("../../observability/logger");
 
 const inFlightStreamIntents = new Map();
 const latestStreamSelectionByClient = new Map();
@@ -11,6 +12,7 @@ const INACTIVITY_LIMIT = 20 * 60;
 const EPISODE_SHARE_TTL_SEC = 30 * 60;
 const EPISODE_SHARE_MAX_IPS = 6;
 const EPISODE_SHARE_KEY_PREFIX = "episode:share";
+const logger = getLogger({ component: "stream-route" });
 
 function buildEpisodeShareKey(episodeId) {
   return `${EPISODE_SHARE_KEY_PREFIX}:${episodeId}`;
@@ -107,16 +109,25 @@ function resolveEpisodeResolver(injected = {}) {
     return injected.resolveEpisode;
   }
 
-  if (injected.brokerClient && typeof injected.brokerClient.resolveEpisode === "function") {
-    return injected.brokerClient.resolveEpisode.bind(injected.brokerClient);
-  }
-
-  const brokerClient = createBrokerClient({
-    baseUrl: injected.brokerBaseUrl,
+  const dClient = createDClient({
+    baseUrl: injected.dBaseUrl,
     fetchImpl: injected.fetchImpl,
     executeBoundedDependency: injected.executeBoundedDependency
   });
-  return brokerClient.resolveEpisode.bind(brokerClient);
+  return dClient.resolveEpisode.bind(dClient);
+}
+
+function resolveForwardUserAgent(injected = {}) {
+  if (typeof injected.forwardUserAgent === "function") {
+    return injected.forwardUserAgent;
+  }
+
+  const dClient = createDClient({
+    baseUrl: injected.dBaseUrl,
+    fetchImpl: injected.fetchImpl,
+    executeBoundedDependency: injected.executeBoundedDependency
+  });
+  return dClient.forwardUserAgent.bind(dClient);
 }
 
 async function resolveStreamIntent(ip, episodeId, injected = {}) {
@@ -153,13 +164,13 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     if (allowedIps.includes(ip)) {
       await writeSessionView({
         resolvedUrl: existingShare.url,
-        title: existingShare.title || "Resolved via Jipi",
+        title: existingShare.title,
         status: "cache_hit",
         reason: "episode_share_hit"
       });
       return {
         status: "ok",
-        title: existingShare.title || "Resolved via Jipi",
+        title: existingShare.title,
         url: existingShare.url
       };
     }
@@ -182,13 +193,13 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
       await redisCommand(["SET", shareKey, JSON.stringify(nextShare), "EX", String(ttlSec)]);
       await writeSessionView({
         resolvedUrl: nextShare.url,
-        title: nextShare.title || "Resolved via Jipi",
+        title: nextShare.title,
         status: "cache_hit",
         reason: "episode_share_join"
       });
       return {
         status: "ok",
-        title: nextShare.title || "Resolved via Jipi",
+        title: nextShare.title,
         url: nextShare.url
       };
     }
@@ -196,9 +207,9 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
 
   if (typeof injected.emitTelemetry === "function") {
     injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_ATTEMPT, {
-      source: "broker",
+      source: "d",
       cause: "resolve_episode",
-      dependency: "broker",
+      dependency: "d",
       episodeId
     });
   }
@@ -210,8 +221,8 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
   } catch (error) {
     if (typeof injected.emitTelemetry === "function" && typeof injected.classifyFailure === "function") {
       injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_FAILURE, {
-        ...injected.classifyFailure({ error, source: "broker" }),
-        dependency: "broker",
+        ...injected.classifyFailure({ error, source: "d" }),
+        dependency: "d",
         episodeId
       });
     }
@@ -228,7 +239,7 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
       injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_FAILURE, {
         source: "validation",
         cause: "validation_invalid_stream_url",
-        dependency: "broker",
+        dependency: "d",
         episodeId
       });
     }
@@ -258,14 +269,14 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
   await redisCommand(["SET", shareKey, JSON.stringify(payload), "EX", String(EPISODE_SHARE_TTL_SEC)]);
   await writeSessionView({
     resolvedUrl: finalUrl,
-    title: resolved.title || "Resolved via Jipi",
+    title: resolved.title,
     status: "resolved",
     reason: "resolved_success"
   });
 
   return {
     status: "ok",
-    title: resolved.title || "Resolved via Jipi",
+    title: resolved.title,
     url: finalUrl
   };
 }
@@ -345,8 +356,8 @@ async function handleStreamRequest(input = {}, injected = {}) {
     const result = await resolveLatestStreamIntent(ip, episodeId, streamInjected);
 
     if (result.status === "degraded") {
-      const classifyFailure = injected.classifyFailure || ((value) => ({ source: "broker", cause: value.reason || "dependency_unavailable" }));
-      const degraded = classifyFailure({ reason: result.cause || "dependency_unavailable", source: "broker" });
+      const classifyFailure = injected.classifyFailure || ((value) => ({ source: "d", cause: value.reason || "dependency_unavailable" }));
+      const degraded = classifyFailure({ reason: result.cause || "dependency_unavailable", source: "d" });
       try {
         await upsertSessionView(injected.redisCommand, {
           ip,
@@ -384,6 +395,38 @@ async function handleStreamRequest(input = {}, injected = {}) {
       throw new Error("handleStreamRequest requires injected.sendJson");
     }
 
+    const forwardUserAgent = resolveForwardUserAgent(streamInjected);
+    Promise.resolve()
+      .then(() => forwardUserAgent(requestUserAgent, episodeId, {
+        onFailure: (error) => {
+          logger.warn({
+            episodeId,
+            userAgent: requestUserAgent,
+            errorCode: String(error && error.code || "ua_forward_error"),
+            errorMessage: String(error && error.message || "Unknown UA forward error")
+          }, "ua_forward_failed");
+
+          if (typeof injected.onUaForwardError === "function") {
+            Promise.resolve()
+              .then(() => injected.onUaForwardError({
+                error,
+                episodeId,
+                ip,
+                userAgent: requestUserAgent
+              }))
+              .catch(() => {});
+          }
+        }
+      }))
+      .catch((error) => {
+        logger.warn({
+          episodeId,
+          userAgent: requestUserAgent,
+          errorCode: String(error && error.code || "ua_forward_error"),
+          errorMessage: String(error && error.message || "Unknown UA forward error")
+        }, "ua_forward_failed");
+      });
+
     injected.sendJson(req, res, 200, {
       streams: [formatStream(result.title, result.url)]
     });
@@ -394,7 +437,7 @@ async function handleStreamRequest(input = {}, injected = {}) {
     return {
       handled: true,
       outcome: {
-        source: "broker",
+        source: "d",
         cause: "success",
         result: "success"
       }
@@ -427,8 +470,8 @@ async function handleStreamRequest(input = {}, injected = {}) {
       "stream.degraded",
       `stream.error:${String(error && error.code || "stream_error")}`
     ]);
-    const classifyFailure = injected.classifyFailure || ((value) => ({ source: "broker", cause: value.error ? "dependency_unavailable" : "dependency_unavailable" }));
-    const degraded = classifyFailure({ error, source: "broker" });
+    const classifyFailure = injected.classifyFailure || ((value) => ({ source: "d", cause: value.error ? "dependency_unavailable" : "dependency_unavailable" }));
+    const degraded = classifyFailure({ error, source: "d" });
     return {
       handled: true,
       outcome: {

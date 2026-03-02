@@ -14,7 +14,7 @@ module.exports = Object.freeze({
   },
   integrations: {
     redisClient: "./integrations/redis-client",
-    brokerClient: "./integrations/broker-client"
+    dClient: "./integrations/d-client"
   },
   presentation: {
     streamPayloads: "./presentation/stream-payloads"

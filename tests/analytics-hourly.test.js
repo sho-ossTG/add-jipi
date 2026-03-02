@@ -88,4 +88,9 @@ test("hourly tracker performs fast counter increments and unique tracking", asyn
   assert.equal(Number(hash.get(`${bucket}|policy.admitted|count`)), 2);
   assert.match(String(hash.get(`${bucket}|requests.total|first_seen`)), /^\d{4}-\d{2}-\d{2}T/);
   assert.match(String(hash.get(`${bucket}|requests.total|last_seen`)), /^\d{4}-\d{2}-\d{2}T/);
+
+  const requestsTotalUnique = redis.hll.get(`${hourlyKey}:unique:${bucket}|requests.total`);
+  const policyAdmittedUnique = redis.hll.get(`${hourlyKey}:unique:${bucket}|policy.admitted`);
+  assert.equal(requestsTotalUnique && requestsTotalUnique.size, 1);
+  assert.equal(policyAdmittedUnique && policyAdmittedUnique.size, 1);
 });

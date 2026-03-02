@@ -6,7 +6,7 @@ This directory defines ownership for the Phase 5 modular migration. The goal is 
 
 - `modules/routing/`: HTTP route composition and request flow orchestration.
 - `modules/policy/`: business policy decisions and deterministic rule evaluation.
-- `modules/integrations/`: external dependency clients (Redis, broker, other services).
+- `modules/integrations/`: external dependency clients (Redis, D, other services).
 - `modules/presentation/`: response shaping and payload formatting.
 
 Hybrid model:
@@ -55,7 +55,7 @@ Final import-direction examples after 05-05 migration:
 - `modules/routing/operator-routes.js` -> `modules/presentation/operator-diagnostics.js`
 - `modules/routing/operator-routes.js` -> `modules/presentation/quarantine-page.js`
 - `modules/routing/http-handler.js` -> `modules/routing/request-controls.js` and `modules/routing/stream-route.js`
-- `modules/routing/stream-route.js` -> `modules/integrations/broker-client.js` and `modules/presentation/stream-payloads.js`
+- `modules/routing/stream-route.js` -> `modules/integrations/d-client.js` and `modules/presentation/stream-payloads.js`
 
 These examples are intentionally concrete so maintainers can change route behavior or output shaping without editing integration clients.
 

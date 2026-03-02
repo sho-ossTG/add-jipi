@@ -298,8 +298,8 @@ test("per-episode sharing never reuses links across different episodeIds", async
   }
 });
 
-test("broker resolve retries once on transient HTTP failure", async () => {
-  process.env.B_BASE_URL = "https://broker.example";
+test("D resolve retries once on transient HTTP failure", async () => {
+  process.env.D_BASE_URL = "https://d.example";
   let calls = 0;
 
   const originalFetch = global.fetch;
@@ -318,7 +318,7 @@ test("broker resolve retries once on transient HTTP failure", async () => {
       ok: true,
       status: 200,
       async json() {
-        return { url: "https://cdn.example.com/onepiece-1-2.mp4", filename: "One Piece S1E2.mp4" };
+        return { url: "https://cdn.example.com/onepiece-1-2.mp4", title: "One Piece S1E2" };
       }
     };
   };
@@ -329,16 +329,17 @@ test("broker resolve retries once on transient HTTP failure", async () => {
     assert.equal(calls, 2);
     assert.match(resolved.url, /^https:\/\//);
   } finally {
+    delete process.env.D_BASE_URL;
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../addon")];
   }
 });
 
-test("broker resolve timeout path stays within bounded retry budget", async () => {
-  process.env.B_BASE_URL = "https://broker.example";
-  process.env.BROKER_ATTEMPT_TIMEOUT_MS = "1800";
-  process.env.BROKER_TOTAL_TIMEOUT_MS = "5000";
-  process.env.BROKER_RETRY_JITTER_MS = "150";
+test("D resolve timeout path stays within bounded retry budget", async () => {
+  process.env.D_BASE_URL = "https://d.example";
+  process.env.D_ATTEMPT_TIMEOUT_MS = "1800";
+  process.env.D_TOTAL_TIMEOUT_MS = "5000";
+  process.env.D_RETRY_JITTER_MS = "150";
   let calls = 0;
 
   const originalFetch = global.fetch;
@@ -364,16 +365,17 @@ test("broker resolve timeout path stays within bounded retry budget", async () =
     assert.equal(calls, 2);
     assert.ok(elapsed < 6200, `expected timeout budget under 6200ms, got ${elapsed}ms`);
   } finally {
-    delete process.env.BROKER_ATTEMPT_TIMEOUT_MS;
-    delete process.env.BROKER_TOTAL_TIMEOUT_MS;
-    delete process.env.BROKER_RETRY_JITTER_MS;
+    delete process.env.D_BASE_URL;
+    delete process.env.D_ATTEMPT_TIMEOUT_MS;
+    delete process.env.D_TOTAL_TIMEOUT_MS;
+    delete process.env.D_RETRY_JITTER_MS;
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../addon")];
   }
 });
 
-test("broker resolve accepts links-array payload shape", async () => {
-  process.env.B_BASE_URL = "https://broker.example";
+test("D resolve rejects legacy links-array payloads", async () => {
+  process.env.D_BASE_URL = "https://d.example";
 
   const originalFetch = global.fetch;
   global.fetch = async () => {
@@ -395,9 +397,12 @@ test("broker resolve accepts links-array payload shape", async () => {
 
   try {
     const addon = loadAddon();
-    const resolved = await addon.resolveEpisode("tt0388629:1:4");
-    assert.equal(resolved.url, "https://cdn.example.com/onepiece-1-4.mp4");
+    await assert.rejects(
+      () => addon.resolveEpisode("tt0388629:1:4"),
+      (error) => error && error.code === "validation_error"
+    );
   } finally {
+    delete process.env.D_BASE_URL;
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../addon")];
   }

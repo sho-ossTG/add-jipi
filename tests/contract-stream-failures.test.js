@@ -58,8 +58,8 @@ test("dependency unavailable maps to deterministic unavailable fallback stream",
 
   try {
     addon.resolveEpisode = async () => {
-      const error = new Error("broker unavailable");
-      error.code = "broker_http_error";
+      const error = new Error("D unavailable");
+      error.code = "dependency_unavailable";
       error.statusCode = 503;
       throw error;
     };
@@ -69,6 +69,7 @@ test("dependency unavailable maps to deterministic unavailable fallback stream",
     assert.equal(response.body.streams.length, 1);
     assert.match(response.body.streams[0].url, /^https:\/\//);
     assert.match(response.body.streams[0].title, /temporarily unavailable/i);
+    assert.equal(runtime.state.strings.get("stats:d_error"), "1");
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
     global.fetch = originalFetch;
@@ -77,7 +78,7 @@ test("dependency unavailable maps to deterministic unavailable fallback stream",
   }
 });
 
-test("invalid upstream protocol degrades to unavailable fallback mapping", async () => {
+test("validation error maps to deterministic unavailable fallback stream", async () => {
   const runtime = createRedisRuntime();
   setRedisEnv();
 
@@ -88,10 +89,11 @@ test("invalid upstream protocol degrades to unavailable fallback mapping", async
   const handler = loadServerless();
 
   try {
-    addon.resolveEpisode = async () => ({
-      url: "javascript:alert(1)",
-      title: "bad protocol"
-    });
+    addon.resolveEpisode = async () => {
+      const error = new Error("invalid D payload");
+      error.code = "validation_error";
+      throw error;
+    };
 
     const response = await request(handler, "/stream/series/tt0388629%3A1%3A9.json", { ip: "198.51.100.43" });
     assert.equal(response.statusCode, 200);

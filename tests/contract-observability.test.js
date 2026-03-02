@@ -242,7 +242,7 @@ test("all request lifecycle telemetry shares one non-empty correlation ID", asyn
   }
 });
 
-test("failure telemetry source classification is deterministic across policy redis broker and validation", async () => {
+test("failure telemetry source classification is deterministic across policy redis d and validation", async () => {
   const events = [];
   setBaseLoggerForTest(createCaptureLogger(events));
 
@@ -274,12 +274,12 @@ test("failure telemetry source classification is deterministic across policy red
     process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
     process.env.KV_REST_API_TOKEN = "token";
     addon.resolveEpisode = async () => {
-      const error = new Error("broker unavailable");
-      error.code = "broker_http_error";
+      const error = new Error("dependency unavailable");
+      error.code = "dependency_unavailable";
       throw error;
     };
     await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A3.json"));
-    assert.ok(events.some((entry) => entry.event === "dependency.failure" && entry.source === SOURCES.BROKER));
+    assert.ok(events.some((entry) => entry.event === "dependency.failure" && entry.source === SOURCES.D));
 
     events.length = 0;
     addon.resolveEpisode = async () => ({
@@ -303,7 +303,7 @@ test("unknown free-form source values normalize to canonical source taxonomy", (
     cause: "unknown_outage"
   });
 
-  assert.deepEqual(Object.values(SOURCES).sort(), ["broker", "policy", "redis", "validation"]);
+  assert.deepEqual(Object.values(SOURCES).sort(), ["d", "policy", "redis", "validation"]);
   assert.ok(Object.values(SOURCES).includes(normalized.source));
 });
 
