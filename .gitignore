@@ -26,3 +26,13 @@ build/Release
 # https://www.npmjs.org/doc/misc/npm-faq.html#should-i-check-my-node_modules-folder-into-git
 node_modules
 NUL
+
+claude-user/
+
+# GSD planning docs (local only)
+.planning/
+
+# AI tool configs (local only)
+.agents/
+.opencode/
+opencode.json
