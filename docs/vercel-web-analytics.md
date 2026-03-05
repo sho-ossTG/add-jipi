@@ -17,7 +17,7 @@ This guide will help you get started with using Vercel Web Analytics on your pro
   </Code>
   <Code tab="yarn">
   ```bash
-  yarn i vercel
+  yarn add vercel
   ```
   </Code>
   <Code tab="npm">
