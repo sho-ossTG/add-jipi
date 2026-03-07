@@ -14,7 +14,7 @@ const { executeBoundedDependency } = require("./bounded-dependency");
  * Response JSON (2xx):
  *   {
  *     url: string (required, must start with "https://")
- *     title: string (required, non-empty)
+ *     filename: string (required, non-empty)
  *   }
  * Error semantics:
  *   - throws code=dependency_unavailable when D_BASE_URL is unset, network fails,
@@ -67,18 +67,18 @@ function validateResolveResponse(payload) {
   }
 
   const resolvedUrl = typeof payload.url === "string" ? payload.url.trim() : "";
-  const resolvedTitle = typeof payload.title === "string" ? payload.title.trim() : "";
+  const resolvedFilename = typeof payload.filename === "string" ? payload.filename.trim() : "";
 
   if (!resolvedUrl || !resolvedUrl.startsWith("https://")) {
     throw createError("D returned invalid url", "validation_error");
   }
-  if (!resolvedTitle) {
-    throw createError("D returned invalid title", "validation_error");
+  if (!resolvedFilename) {
+    throw createError("D returned invalid filename", "validation_error");
   }
 
   return {
     url: resolvedUrl,
-    title: resolvedTitle
+    title: resolvedFilename
   };
 }
 

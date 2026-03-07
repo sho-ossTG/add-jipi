@@ -27,7 +27,7 @@ test("resolveEpisode throws dependency_unavailable when D_BASE_URL is unset", as
   const client = createDClient({
     fetchImpl: async () => {
       calls += 1;
-      return createJsonResponse(200, { url: "https://example.test", title: "x" });
+      return createJsonResponse(200, { url: "https://example.test", filename: "x" });
     },
     env: {}
   });
@@ -94,7 +94,7 @@ test("forwardUserAgent sends expected payload and stays fire-and-forget safe", a
 test("resolveEpisode preserves dependency_timeout from bounded helper", async () => {
   const client = createDClient({
     baseUrl: "https://d.example",
-    fetchImpl: async () => createJsonResponse(200, { url: "https://example.test", title: "ok" }),
+    fetchImpl: async () => createJsonResponse(200, { url: "https://example.test", filename: "ok" }),
     executeBoundedDependency: async () => {
       const err = new Error("timed out");
       err.code = "dependency_timeout";
@@ -139,13 +139,13 @@ test("resolveEpisode maps network failures to dependency_unavailable", async () 
   });
 });
 
-test("resolveEpisode validates url/title contract", async () => {
+test("resolveEpisode validates url/filename contract", async () => {
   const invalidPayloads = [
-    { title: "Missing URL" },
-    { url: "http://insecure.test", title: "Bad URL" },
+    { filename: "Missing URL" },
+    { url: "http://insecure.test", filename: "Bad URL" },
     { url: "https://valid.test" },
-    { url: "https://valid.test", title: "" },
-    { url: "https://valid.test", title: "   " }
+    { url: "https://valid.test", filename: "" },
+    { url: "https://valid.test", filename: "   " }
   ];
 
   for (const payload of invalidPayloads) {
@@ -165,7 +165,7 @@ test("resolveEpisode uses D timeout defaults with bounded dependency", async () 
   let observedOptions;
   const client = createDClient({
     baseUrl: "https://d.example",
-    fetchImpl: async () => createJsonResponse(200, { url: "https://ok.test", title: "Ok" }),
+    fetchImpl: async () => createJsonResponse(200, { url: "https://ok.test", filename: "Ok" }),
     executeBoundedDependency: async (operation, options) => {
       observedOptions = options;
       return operation({ timeout: 25 });
