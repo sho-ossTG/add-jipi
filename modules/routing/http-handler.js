@@ -197,6 +197,32 @@ function isGatedStreamRoute(pathname) {
   return pathname.startsWith("/stream/");
 }
 
+function parseStreamEpisodeId(pathname) {
+  const match = String(pathname || "").match(/^\/stream\/series\/([^/]+)\.json$/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return "";
+  }
+}
+
+function isBlockedStreamCause(cause) {
+  return cause === "policy_shutdown" || cause === "capacity_busy";
+}
+
+function normalizeStreamSummaryMode(cause) {
+  if (cause === "policy_shutdown") return "shutdown";
+  if (cause === "capacity_busy") return "capacity_busy";
+  return "streaming";
+}
+
+function normalizeStreamSummaryOutcome(result, cause) {
+  if (isBlockedStreamCause(cause)) return "blocked";
+  if (result === "degraded") return "degraded";
+  return "success";
+}
+
 function classifyRoute(pathname) {
   if (
     pathname === "/quarantine" ||
@@ -394,6 +420,8 @@ async function createHttpHandler(req, res) {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const pathname = reqUrl.pathname;
     const routeType = classifyRoute(pathname);
+    const streamEpisodeId = parseStreamEpisodeId(pathname);
+    const streamUserAgent = String(req.headers["user-agent"] || "");
     let reliabilityOutcome = null;
 
     function setReliabilityOutcome(outcome = {}) {
@@ -547,6 +575,25 @@ async function createHttpHandler(req, res) {
         durationMs: Date.now() - startedAt,
         correlationId: getCorrelationId()
       });
+
+      if (isGatedStreamRoute(pathname)) {
+        const cause = reliabilityOutcome && reliabilityOutcome.cause ? reliabilityOutcome.cause : "success";
+        const result = reliabilityOutcome && reliabilityOutcome.result ? reliabilityOutcome.result : fallbackResult;
+        const outcome = normalizeStreamSummaryOutcome(result, cause);
+
+        getLogger({ component: "serverless" }).info({
+          event: "stream.request_end",
+          episode_id: streamEpisodeId,
+          outcome,
+          mode: normalizeStreamSummaryMode(cause),
+          duration_ms: Date.now() - startedAt,
+          error: outcome === "success" ? null : cause,
+          userAgent: streamUserAgent,
+          ip: getTrustedClientIp(req),
+          cache: null,
+          worker: null
+        });
+      }
     }
   });
 }

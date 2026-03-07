@@ -40,6 +40,10 @@ function createCaptureLogger(events, bindings = {}) {
   };
 }
 
+function getStreamSummaryLogs(events) {
+  return events.filter((entry) => entry.event === "stream.request_end");
+}
+
 function withFixedJerusalemTime(run, hour = "12") {
   const originalDateTimeFormat = Intl.DateTimeFormat;
   Intl.DateTimeFormat = function MockDateTimeFormat() {
@@ -88,7 +92,7 @@ function createRedisRuntime(options = {}) {
     }
 
     if (op === "EVAL") {
-      result = [1, "admitted:new", "", 1];
+      result = options.sessionGateResult || [1, "admitted:new", "", 1];
     }
 
     if (op === "INCR") {
@@ -159,6 +163,103 @@ function createRedisRuntime(options = {}) {
 
   return { fetch };
 }
+
+test("stream request-end log emits one summary line with required OBSV-03 fields", async () => {
+  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token";
+
+  const events = [];
+  setBaseLoggerForTest(createCaptureLogger(events));
+
+  const runtime = createRedisRuntime();
+  const originalFetch = global.fetch;
+  global.fetch = runtime.fetch;
+
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  addon.resolveEpisode = async () => ({
+    url: "https://cdn.example.com/onepiece-1-6.mp4",
+    title: "One Piece S1E6"
+  });
+
+  const handler = loadServerless();
+
+  try {
+    const response = await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A6.json", {
+      ip: "198.51.100.36",
+      headers: {
+        "x-correlation-id": "cid-stream-summary-1",
+        "user-agent": "OBSV3-Client/1.0"
+      }
+    }));
+
+    assert.equal(response.statusCode, 200);
+
+    const summaries = getStreamSummaryLogs(events);
+    assert.equal(summaries.length, 1);
+
+    const summary = summaries[0];
+    assert.equal(summary.episode_id, "tt0388629:1:6");
+    assert.equal(summary.outcome, "success");
+    assert.equal(summary.mode, "streaming");
+    assert.equal(summary.error, null);
+    assert.equal(summary.userAgent, "OBSV3-Client/1.0");
+    assert.equal(summary.ip, "198.51.100.36");
+    assert.equal(summary.cache, null);
+    assert.equal(summary.worker, null);
+    assert.equal(typeof summary.duration_ms, "number");
+    assert.ok(summary.duration_ms >= 0);
+  } finally {
+    addon.resolveEpisode = originalResolveEpisode;
+    global.fetch = originalFetch;
+    resetBaseLoggerForTest();
+    delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../addon")];
+  }
+});
+
+test("stream request-end log normalizes blocked outcomes for shutdown and capacity", async () => {
+  process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token";
+
+  const events = [];
+  setBaseLoggerForTest(createCaptureLogger(events));
+
+  const shutdownRuntime = createRedisRuntime();
+  const originalFetch = global.fetch;
+  global.fetch = shutdownRuntime.fetch;
+  const handler = loadServerless();
+
+  try {
+    const shutdownResponse = await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A7.json"), "02");
+    assert.equal(shutdownResponse.statusCode, 200);
+
+    const capacityRuntime = createRedisRuntime({
+      sessionGateResult: [0, "blocked:slot_taken", "", 2]
+    });
+    global.fetch = capacityRuntime.fetch;
+
+    const capacityResponse = await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A8.json"));
+    assert.equal(capacityResponse.statusCode, 200);
+
+    const summaries = getStreamSummaryLogs(events);
+    assert.equal(summaries.length, 2);
+
+    assert.equal(summaries[0].episode_id, "tt0388629:1:7");
+    assert.equal(summaries[0].outcome, "blocked");
+    assert.equal(summaries[0].mode, "shutdown");
+    assert.equal(summaries[0].error, "policy_shutdown");
+
+    assert.equal(summaries[1].episode_id, "tt0388629:1:8");
+    assert.equal(summaries[1].outcome, "blocked");
+    assert.equal(summaries[1].mode, "capacity_busy");
+    assert.equal(summaries[1].error, "capacity_busy");
+  } finally {
+    global.fetch = originalFetch;
+    resetBaseLoggerForTest();
+    delete require.cache[require.resolve("../serverless")];
+  }
+});
 
 function assertSanitizedDiagnosticsPayload(payload) {
   const serialized = JSON.stringify(payload).toLowerCase();
