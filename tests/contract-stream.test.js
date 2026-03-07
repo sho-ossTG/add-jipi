@@ -76,15 +76,14 @@ test("GET supported stream returns contract-valid HTTPS stream payload", async (
   assert.equal(stream.behaviorHints.notWebReady, true);
 });
 
-test("GET stream route blocked by controls returns protocol-safe empty streams", async () => {
+test("GET stream route blocked by controls returns protocol-safe fallback stream", async () => {
   const response = await request("/stream/series/tt0388629%3A1%3A1.json", {
     mode: "slot-blocked"
   });
 
   assert.equal(response.statusCode, 200);
   assert.ok(Array.isArray(response.body.streams));
-  assert.deepEqual(response.body.streams, []);
-  assert.equal(response.body.notice, "Temporary load. Try again in a few minutes.");
+  assert.equal(response.body.streams.length, 1);
 });
 
 test("GET unsupported stream id returns empty streams payload", async () => {
@@ -106,8 +105,73 @@ test("manifest and catalog stay available when stream slot gate is blocked", asy
 
   const streamResponse = await request("/stream/series/tt0388629%3A1%3A1.json", { mode: "slot-blocked" });
   assert.equal(streamResponse.statusCode, 200);
-  assert.deepEqual(streamResponse.body.streams, []);
-  assert.equal(streamResponse.body.notice, "Temporary load. Try again in a few minutes.");
+  assert.equal(streamResponse.body.streams.length, 1);
+});
+
+test("reconnecting active session within grace is admitted without consuming another slot", async () => {
+  setRedisEnv();
+  const redisRuntime = createRedisRuntime();
+  const originalFetch = global.fetch;
+  const gateDecisions = [];
+  global.fetch = async (url, options = {}) => {
+    const payload = JSON.parse(options.body || "[]");
+    const command = Array.isArray(payload) ? payload[0] : [];
+    const operation = String(command[0] || "").toUpperCase();
+    const response = await redisRuntime.fetch(url, options);
+
+    if (operation !== "EVAL") {
+      return response;
+    }
+
+    const body = await response.json();
+    const gateResult = body && body[0] && body[0].result;
+    if (Array.isArray(gateResult)) {
+      gateDecisions.push(String(gateResult[1] || ""));
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      async json() {
+        return body;
+      }
+    };
+  };
+
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
+  addon.resolveEpisode = async () => ({
+    url: "https://cdn.example.com/onepiece-1-9.mp4",
+    title: "One Piece S1E9"
+  });
+
+  const handler = loadServerless();
+
+  try {
+    const first = await requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A9.json", {
+      ip: "203.0.113.9",
+      headers: {
+        "x-forwarded-for": "203.0.113.9",
+        "user-agent": "ACCS2-First/1.0"
+      }
+    });
+    assert.equal(first.statusCode, 200);
+
+    const second = await requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A9.json", {
+      ip: "203.0.113.9",
+      headers: {
+        "x-forwarded-for": "203.0.113.9",
+        "user-agent": "ACCS2-Reconnect/1.0"
+      }
+    });
+    assert.equal(second.statusCode, 200);
+
+    assert.deepEqual(gateDecisions.slice(0, 2), ["admitted:new", "admitted:existing"]);
+  } finally {
+    global.fetch = originalFetch;
+    addon.resolveEpisode = originalResolveEpisode;
+    delete require.cache[require.resolve("../serverless")];
+  }
 });
 
 test("stream response completes before pending UA forwarding resolves", async () => {
@@ -211,13 +275,20 @@ test("UA forwarding failure logs warn, increments ua_forward_error, and keeps st
   const handler = loadServerless();
 
   try {
-    const response = await requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A3.json", {
+    const responsePromise = requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A3.json", {
       ip: "203.0.113.1",
       headers: {
         "x-forwarded-for": "203.0.113.1",
         "user-agent": "FR4-Failure/1.0"
       }
     });
+
+    const response = await Promise.race([
+      responsePromise,
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 250))
+    ]);
+
+    assert.notEqual(response, "timeout");
 
     assert.equal(response.statusCode, 200);
     assert.ok(Array.isArray(response.body.streams));
