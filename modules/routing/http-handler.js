@@ -54,11 +54,11 @@ const DEFAULT_CORS_METHODS = "GET,OPTIONS";
 
 const DEGRADED_STREAM_POLICY = Object.freeze({
   capacity_busy: {
-    mode: "empty",
+    mode: "fallback",
     message: "Temporary load. Try again in a few minutes."
   },
   policy_shutdown: {
-    mode: "empty",
+    mode: "fallback",
     message: "Temporary load. Try again in a few minutes."
   },
   dependency_timeout: {
