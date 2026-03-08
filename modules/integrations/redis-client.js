@@ -4,7 +4,7 @@ const DEFAULT_RETRY_JITTER_MS = 120;
 const {
   executeBoundedDependency,
   isTransientDependencyFailure
-} = require("./bounded-dependency");
+} = require('./bounded-dependency');
 
 function getRedisConfig(options = {}) {
   const env = options.env || process.env;
@@ -15,7 +15,6 @@ function getRedisConfig(options = {}) {
 
 function createRedisClient(options = {}) {
   const customFetchImpl = options.fetchImpl;
-  const boundedDependency = options.executeBoundedDependency || executeBoundedDependency;
   const staticUrl = options.url;
   const staticToken = options.token;
   const env = options.env;
@@ -45,7 +44,7 @@ function createRedisClient(options = {}) {
       throw err;
     }
 
-    const response = await boundedDependency(async ({ timeout }) => {
+    const response = await executeBoundedDependency(async ({ timeout }) => {
       const nextResponse = await getFetchImpl()(`${config.url}/pipeline`, {
         method: "POST",
         headers: {
