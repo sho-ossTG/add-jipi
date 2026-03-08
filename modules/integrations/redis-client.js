@@ -2,23 +2,9 @@ const DEFAULT_ATTEMPT_TIMEOUT_MS = 900;
 const DEFAULT_TOTAL_TIMEOUT_MS = 1800;
 const DEFAULT_RETRY_JITTER_MS = 120;
 const {
-  executeBoundedDependency: executeSharedBoundedDependency,
+  executeBoundedDependency,
   isTransientDependencyFailure
 } = require("./bounded-dependency");
-
-async function executeBoundedDependency(operation, options = {}) {
-  const {
-    attemptTimeoutMs = DEFAULT_ATTEMPT_TIMEOUT_MS,
-    totalBudgetMs = DEFAULT_TOTAL_TIMEOUT_MS,
-    jitterMs = DEFAULT_RETRY_JITTER_MS
-  } = options;
-
-  return executeSharedBoundedDependency(operation, {
-    attemptTimeoutMs,
-    totalBudgetMs,
-    jitterMs
-  });
-}
 
 function getRedisConfig(options = {}) {
   const env = options.env || process.env;
@@ -78,6 +64,10 @@ function createRedisClient(options = {}) {
       }
 
       return nextResponse;
+    }, {
+      attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS,
+      totalBudgetMs: DEFAULT_TOTAL_TIMEOUT_MS,
+      jitterMs: DEFAULT_RETRY_JITTER_MS
     });
 
     const data = await response.json();
