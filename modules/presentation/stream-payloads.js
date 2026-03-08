@@ -52,10 +52,16 @@ function sendDegradedStream(req, res, causeInput, injected = {}) {
 
   const classification = resolveFailureClassification(causeInput, injected);
   if (typeof injected.emitTelemetry === "function") {
+    const route = (req && req.url) || "";
+    const method = (req && req.method) || "GET";
+    const detail = causeInput && typeof causeInput === "object"
+      ? String(causeInput.message || causeInput.code || "unknown error")
+      : String(causeInput || classification.cause || "unknown reason");
     injected.emitTelemetry(injected.events && injected.events.REQUEST_DEGRADED, {
       ...classification,
-      route: (req && req.url) || "",
-      method: (req && req.method) || "GET"
+      route,
+      method,
+      message: `Server A returned a degraded stream response for ${method} ${route} because ${classification.cause || "the request"} was triggered: ${detail}`
     });
   }
 

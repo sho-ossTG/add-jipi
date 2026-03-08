@@ -220,10 +220,12 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     resolved = await resolveEpisode(episodeId);
   } catch (error) {
     if (typeof injected.emitTelemetry === "function" && typeof injected.classifyFailure === "function") {
+      const errorDetail = String((error && error.message) || error || "unknown error");
       injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_FAILURE, {
         ...injected.classifyFailure({ error, source: "d" }),
         dependency: "d",
-        episodeId
+        episodeId,
+        message: `Server A could not resolve stream metadata for episode ${episodeId} because Server D returned an error: ${errorDetail}`
       });
     }
     throw error;
@@ -240,7 +242,8 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
         source: "validation",
         cause: "validation_invalid_stream_url",
         dependency: "d",
-        episodeId
+        episodeId,
+        message: `Server A rejected the resolved stream URL for episode ${episodeId} because Server D returned a non-HTTPS URL: ${String(finalUrl || "empty")}`
       });
     }
     return {

@@ -87,10 +87,12 @@ async function redisCommand(command) {
   try {
     return await redisClient.command(command);
   } catch (error) {
+    const errorDetail = String((error && error.message) || error || "unknown error");
     emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
       ...classifyFailure({ error, source: "redis" }),
       dependency: "redis",
-      operation
+      operation,
+      message: `Server A could not complete Redis operation ${operation} because Redis returned an error: ${errorDetail}`
     });
     throw error;
   }
