@@ -44,7 +44,7 @@ function createBaseLogger() {
         paths: REDACT_PATHS,
         censor: "[redacted]"
       },
-      base: null,
+      base: { server: "A" },
       messageKey: "message"
     });
   } catch {
