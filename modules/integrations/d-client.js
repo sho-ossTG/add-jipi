@@ -34,16 +34,6 @@ const { executeBoundedDependency } = require("./bounded-dependency");
  *   - fire-and-forget with silent catch (optional non-rejecting onFailure signal)
  *   - no-op when D_BASE_URL is unset
  *
- * POST /api/logs
- * Request JSON:
- *   {
- *     source: "server-a",
- *     events: array
- *   }
- * Response:
- *   - 2xx expected
- *   - fire-and-forget in Phase 1 (silent catch on failures)
- *   - no-op when D_BASE_URL is unset
  */
 
 function parsePositiveInteger(value, fallback) {
@@ -178,29 +168,9 @@ function createDClient(options = {}) {
       });
   }
 
-  function shipFailureLogs(events) {
-    if (!baseUrl) return;
-
-    const logsUrl = new URL("/api/logs", baseUrl).toString();
-
-    Promise.resolve()
-      .then(() => fetchImpl(logsUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          source: "server-a",
-          events: Array.isArray(events) ? events : []
-        })
-      }))
-      .catch(() => {});
-  }
-
   return {
     resolveEpisode,
-    forwardUserAgent,
-    shipFailureLogs
+    forwardUserAgent
   };
 }
 

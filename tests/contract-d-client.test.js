@@ -49,7 +49,6 @@ test("side-channel methods no-op without D_BASE_URL and do not call fetch", asyn
   });
 
   assert.doesNotThrow(() => client.forwardUserAgent("ua", "tt123:1:2"));
-  assert.doesNotThrow(() => client.shipFailureLogs([{ id: 1 }]));
   await flushMicrotasks();
 
   assert.equal(calls, 0);
