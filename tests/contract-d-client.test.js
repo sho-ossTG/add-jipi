@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createDClient } = require("../modules/integrations/d-client");
+const { withRequestContext } = require("../observability/context");
 
 function createJsonResponse(status, payload) {
   return {
@@ -71,15 +72,21 @@ test("forwardUserAgent sends expected payload and stays fire-and-forget safe", a
     }
   });
 
-  const result = client.forwardUserAgent("MyAgent/1.0", "tt123:1:2");
-  assert.equal(result, undefined);
+  const runInContext = withRequestContext(
+    { headers: { "x-correlation-id": "cid-ua-123" } },
+    () => client.forwardUserAgent("MyAgent/1.0", "tt123:1:2")
+  );
+
   assert.equal(callCount, 0);
+  const result = await runInContext;
+  assert.equal(result, undefined);
 
   await flushMicrotasks();
   assert.equal(callCount, 1);
   assert.equal(captured.url, "https://d.example/api/ua");
   assert.equal(captured.options.method, "POST");
   assert.equal(captured.options.headers["content-type"], "application/json");
+  assert.equal(captured.options.headers["x-correlation-id"], "cid-ua-123");
 
   const payload = JSON.parse(captured.options.body);
   assert.equal(payload.userAgent, "MyAgent/1.0");
@@ -88,6 +95,28 @@ test("forwardUserAgent sends expected payload and stays fire-and-forget safe", a
 
   releaseFetch(createJsonResponse(202, {}));
   await flushMicrotasks();
+});
+
+test("resolveEpisode includes x-correlation-id header on D resolve request", async () => {
+  let captured;
+  const client = createDClient({
+    baseUrl: "https://d.example",
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return createJsonResponse(200, { url: "https://ok.test/stream.m3u8", filename: "episode.mp4" });
+    },
+    executeBoundedDependency: async (operation) => operation({ timeout: 50 })
+  });
+
+  const result = await withRequestContext(
+    { headers: { "x-correlation-id": "cid-resolve-123" } },
+    async () => client.resolveEpisode("tt123:1:2")
+  );
+
+  assert.equal(captured.url, "https://d.example/api/resolve");
+  assert.equal(captured.options.headers["content-type"], "application/json");
+  assert.equal(captured.options.headers["x-correlation-id"], "cid-resolve-123");
+  assert.deepEqual(result, { url: "https://ok.test/stream.m3u8", title: "episode.mp4" });
 });
 
 test("resolveEpisode preserves dependency_timeout from bounded helper", async () => {

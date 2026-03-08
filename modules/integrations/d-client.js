@@ -2,6 +2,7 @@ const DEFAULT_ATTEMPT_TIMEOUT_MS = 5000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 10000;
 const DEFAULT_RETRY_JITTER_MS = 150;
 const { executeBoundedDependency } = require("./bounded-dependency");
+const { getCorrelationId } = require("../../observability/context");
 
 /**
  * D HTTP Contract (Phase 1 Stub + Interface Lock)
@@ -98,7 +99,8 @@ function createDClient(options = {}) {
         const nextResponse = await fetchImpl(resolveUrl, {
           method: "POST",
           headers: {
-            "content-type": "application/json"
+            "content-type": "application/json",
+            "x-correlation-id": getCorrelationId()
           },
           body: JSON.stringify({ episodeId: id }),
           signal: AbortSignal.timeout(timeout)
@@ -149,7 +151,8 @@ function createDClient(options = {}) {
       .then(() => fetchImpl(uaUrl, {
         method: "POST",
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "x-correlation-id": getCorrelationId()
         },
         body: JSON.stringify({
           userAgent: String(userAgent || ""),
