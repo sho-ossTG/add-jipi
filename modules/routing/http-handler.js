@@ -39,9 +39,6 @@ function parsePositiveIntEnv(name, fallback) {
 const SLOT_TTL = parsePositiveIntEnv("SLOT_TTL_SEC", 3600);
 const INACTIVITY_LIMIT = parsePositiveIntEnv("INACTIVITY_LIMIT_SEC", 20 * 60);
 const MAX_SESSIONS = parsePositiveIntEnv("MAX_SESSIONS", 2);
-const DEPENDENCY_ATTEMPT_TIMEOUT_MS = 900;
-const DEPENDENCY_TOTAL_TIMEOUT_MS = 1800;
-const DEPENDENCY_RETRY_JITTER_MS = 120;
 const RECONNECT_GRACE_MS = parsePositiveIntEnv("RECONNECT_GRACE_MS", 15000);
 const ROTATION_IDLE_MS = parsePositiveIntEnv("ROTATION_IDLE_MS", 45000);
 const SESSION_VIEW_TTL_SEC = parsePositiveIntEnv("SESSION_VIEW_TTL_SEC", 20 * 60);
@@ -75,70 +72,7 @@ function emitTelemetry(eventName, payload = {}) {
   return emitEvent(getLogger({ component: "serverless" }), eventName, payload);
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function randomJitter(maxMs) {
-  return Math.floor(Math.random() * Math.max(1, maxMs));
-}
-
-function isTransientDependencyFailure(error) {
-  if (!error) return false;
-  const status = Number(error.statusCode || 0);
-  if (status === 408 || status === 429 || status >= 500) return true;
-  const code = String(error.code || "").toLowerCase();
-  return code === "aborterror" || code === "etimedout" || code === "ecanceled" || code === "econnreset";
-}
-
-async function executeBoundedDependency(operation, options = {}) {
-  const {
-    attemptTimeoutMs = DEPENDENCY_ATTEMPT_TIMEOUT_MS,
-    totalBudgetMs = DEPENDENCY_TOTAL_TIMEOUT_MS,
-    jitterMs = DEPENDENCY_RETRY_JITTER_MS
-  } = options;
-
-  const startedAt = Date.now();
-  let attempt = 0;
-  let lastError;
-
-  while (attempt < 2) {
-    const elapsed = Date.now() - startedAt;
-    const remaining = totalBudgetMs - elapsed;
-    if (remaining <= 0) {
-      const timeoutError = new Error("Dependency operation timed out");
-      timeoutError.code = "dependency_timeout";
-      throw timeoutError;
-    }
-
-    const timeout = Math.max(1, Math.min(attemptTimeoutMs, remaining));
-
-    try {
-      return await operation({ timeout });
-    } catch (error) {
-      lastError = error;
-      const canRetry = attempt === 0 && isTransientDependencyFailure(error);
-      if (!canRetry) break;
-
-      const postAttemptElapsed = Date.now() - startedAt;
-      const postAttemptRemaining = totalBudgetMs - postAttemptElapsed;
-      if (postAttemptRemaining <= 1) break;
-
-      const jitterDelay = Math.min(randomJitter(jitterMs), postAttemptRemaining - 1);
-      if (jitterDelay > 0) {
-        await sleep(jitterDelay);
-      }
-    }
-
-    attempt += 1;
-  }
-
-  throw lastError;
-}
-
-const redisClient = createRedisClient({
-  executeBoundedDependency
-});
+const redisClient = createRedisClient();
 
 async function redisCommand(command) {
   const operation = String(command && command[0] ? command[0] : "unknown");
