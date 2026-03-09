@@ -1,5 +1,5 @@
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 5000;
-const DEFAULT_TOTAL_TIMEOUT_MS = 10000;
+const DEFAULT_TOTAL_TIMEOUT_MS = 67000;
 const DEFAULT_RETRY_JITTER_MS = 150;
 const { executeBoundedDependency } = require("./bounded-dependency");
 const { getCorrelationId } = require("../../observability/context");

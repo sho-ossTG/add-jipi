@@ -204,7 +204,7 @@ test("resolveEpisode uses D timeout defaults with bounded dependency", async () 
 
   assert.deepEqual(observedOptions, {
     attemptTimeoutMs: 5000,
-    totalBudgetMs: 10000,
+    totalBudgetMs: 67000,
     jitterMs: 150
   });
 });
