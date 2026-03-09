@@ -7,7 +7,7 @@ const {
 } = require("../modules/policy/time-window");
 const { withFixedJerusalemTime } = require("./helpers/runtime-fixtures");
 
-test("shutdown window boundaries are deterministic at exact Jerusalem times", () => {
+test("shutdown window boundaries are deterministic at exact Beirut times", () => {
   const cases = [
     { label: "00:00", hour: 0, minute: 0, expected: true },
     { label: "00:59", hour: 0, minute: 59, expected: true },
