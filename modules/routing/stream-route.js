@@ -1,9 +1,17 @@
 const { createDClient } = require("../integrations/d-client");
 const defaultStreamPayloads = require("../presentation/stream-payloads");
 const { upsertSessionView } = require("../analytics/session-view");
+const {
+  acquireInFlightLock,
+  createDegradedMarker,
+  createStaleMarker,
+  createSuccessMarker,
+  releaseInFlightLock,
+  waitForInFlightResult,
+  writeInFlightResult
+} = require("./stream-dedup");
 const { getLogger } = require("../../observability/logger");
 
-const inFlightStreamIntents = new Map();
 const latestStreamSelectionByClient = new Map();
 let latestStreamSelectionVersion = 0;
 
@@ -87,21 +95,6 @@ function markLatestSelection(clientId, episodeId) {
   };
   latestStreamSelectionByClient.set(clientId, next);
   return next;
-}
-
-function getOrCreateInFlightIntent(intentKey, producer) {
-  if (inFlightStreamIntents.has(intentKey)) {
-    return inFlightStreamIntents.get(intentKey);
-  }
-
-  const inFlight = Promise.resolve()
-    .then(() => producer())
-    .finally(() => {
-      inFlightStreamIntents.delete(intentKey);
-    });
-
-  inFlightStreamIntents.set(intentKey, inFlight);
-  return inFlight;
 }
 
 function resolveEpisodeResolver(injected = {}) {
@@ -205,91 +198,180 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     }
   }
 
-  if (typeof injected.emitTelemetry === "function") {
-    injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_ATTEMPT, {
-      source: "d",
-      cause: "resolve_episode",
-      dependency: "d",
-      episodeId
-    });
-  }
-
-  const resolveEpisode = resolveEpisodeResolver(injected);
-  let resolved;
-  try {
-    resolved = await resolveEpisode(episodeId);
-  } catch (error) {
-    if (typeof injected.emitTelemetry === "function" && typeof injected.classifyFailure === "function") {
-      const errorDetail = String((error && error.message) || error || "unknown error");
-      injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_FAILURE, {
-        ...injected.classifyFailure({ error, source: "d" }),
-        dependency: "d",
-        episodeId,
-        message: `Server A could not resolve stream metadata for episode ${episodeId} because Server D returned an error: ${errorDetail}`
-      });
-    }
-    throw error;
-  }
-
-  let finalUrl = resolved.url || "";
-  if (finalUrl.startsWith("http://")) {
-    finalUrl = finalUrl.replace("http://", "https://");
-  }
-
-  if (!finalUrl.startsWith("https://")) {
-    if (typeof injected.emitTelemetry === "function") {
-      injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_FAILURE, {
-        source: "validation",
-        cause: "validation_invalid_stream_url",
-        dependency: "d",
-        episodeId,
-        message: `Server A rejected the resolved stream URL for episode ${episodeId} because Server D returned a non-HTTPS URL: ${String(finalUrl || "empty")}`
-      });
-    }
-    return {
-      status: "degraded",
-      cause: "validation_invalid_stream_url"
-    };
-  }
-
-  const nowMs = Date.now();
-  const payload = {
+  const dedupLock = await acquireInFlightLock({
+    redisCommand,
     episodeId,
-    url: finalUrl,
-    title: resolved.title,
-    ownerIp: ip,
-    allowedIps: [ip],
-    createdAtMs: nowMs,
-    lastSharedAtMs: nowMs
-  };
-
-  if (!isCurrentEpisodeSelection(ip, episodeId)) {
-    return {
-      status: "stale"
-    };
-  }
-
-  await redisCommand(["SET", shareKey, JSON.stringify(payload), "EX", String(EPISODE_SHARE_TTL_SEC)]);
-  await writeSessionView({
-    resolvedUrl: finalUrl,
-    title: resolved.title,
-    status: "resolved",
-    reason: "resolved_success"
+    ip,
+    lockTtlSec: Number(injected.dedupLockTtlSec || 70),
+    nowMs: Date.now()
   });
 
-  return {
-    status: "ok",
-    title: resolved.title,
-    url: finalUrl
-  };
+  if (!dedupLock.acquired) {
+    const marker = await waitForInFlightResult({
+      redisCommand,
+      episodeId,
+      ip,
+      waitTimeoutMs: Number(injected.dedupWaitTimeoutMs || 70000),
+      pollIntervalMs: Number(injected.dedupPollIntervalMs || 500),
+      now: typeof injected.now === "function" ? injected.now : () => Date.now(),
+      sleep: typeof injected.sleep === "function" ? injected.sleep : (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    });
+
+    if (marker && marker.type === "success") {
+      await writeSessionView({
+        resolvedUrl: marker.url,
+        title: marker.title,
+        status: "cache_hit",
+        reason: "dedup_wait_hit"
+      });
+      return {
+        status: "ok",
+        title: marker.title,
+        url: marker.url
+      };
+    }
+
+    if (marker && marker.type === "stale") {
+      return {
+        status: "stale"
+      };
+    }
+
+    return {
+      status: "degraded",
+      cause: marker && marker.type === "degraded"
+        ? marker.cause
+        : "dependency_timeout"
+    };
+  }
+
+  try {
+    if (typeof injected.emitTelemetry === "function") {
+      injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_ATTEMPT, {
+        source: "d",
+        cause: "resolve_episode",
+        dependency: "d",
+        episodeId
+      });
+    }
+
+    const resolveEpisode = resolveEpisodeResolver(injected);
+    let resolved;
+    try {
+      resolved = await resolveEpisode(episodeId);
+    } catch (error) {
+      const classifyFailure = typeof injected.classifyFailure === "function"
+        ? injected.classifyFailure
+        : () => ({ source: "d", cause: "dependency_unavailable" });
+      const failure = classifyFailure({ error, source: "d" });
+      await writeInFlightResult({
+        redisCommand,
+        episodeId,
+        ip,
+        marker: createDegradedMarker({ cause: failure.cause || "dependency_unavailable" }),
+        resultTtlSec: Number(injected.dedupResultTtlSec || 70)
+      });
+      if (typeof injected.emitTelemetry === "function" && typeof injected.classifyFailure === "function") {
+        const errorDetail = String((error && error.message) || error || "unknown error");
+        injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_FAILURE, {
+          ...injected.classifyFailure({ error, source: "d" }),
+          dependency: "d",
+          episodeId,
+          message: `Server A could not resolve stream metadata for episode ${episodeId} because Server D returned an error: ${errorDetail}`
+        });
+      }
+      throw error;
+    }
+
+    let finalUrl = resolved.url || "";
+    if (finalUrl.startsWith("http://")) {
+      finalUrl = finalUrl.replace("http://", "https://");
+    }
+
+    if (!finalUrl.startsWith("https://")) {
+      if (typeof injected.emitTelemetry === "function") {
+        injected.emitTelemetry(injected.events && injected.events.DEPENDENCY_FAILURE, {
+          source: "validation",
+          cause: "validation_invalid_stream_url",
+          dependency: "d",
+          episodeId,
+          message: `Server A rejected the resolved stream URL for episode ${episodeId} because Server D returned a non-HTTPS URL: ${String(finalUrl || "empty")}`
+        });
+      }
+      await writeInFlightResult({
+        redisCommand,
+        episodeId,
+        ip,
+        marker: createDegradedMarker({ cause: "validation_invalid_stream_url" }),
+        resultTtlSec: Number(injected.dedupResultTtlSec || 70)
+      });
+      return {
+        status: "degraded",
+        cause: "validation_invalid_stream_url"
+      };
+    }
+
+    const nowMs = Date.now();
+    const payload = {
+      episodeId,
+      url: finalUrl,
+      title: resolved.title,
+      ownerIp: ip,
+      allowedIps: [ip],
+      createdAtMs: nowMs,
+      lastSharedAtMs: nowMs
+    };
+
+    if (!isCurrentEpisodeSelection(ip, episodeId)) {
+      await writeInFlightResult({
+        redisCommand,
+        episodeId,
+        ip,
+        marker: createStaleMarker(),
+        resultTtlSec: Number(injected.dedupResultTtlSec || 70)
+      });
+      return {
+        status: "stale"
+      };
+    }
+
+    await redisCommand(["SET", shareKey, JSON.stringify(payload), "EX", String(EPISODE_SHARE_TTL_SEC)]);
+    await writeInFlightResult({
+      redisCommand,
+      episodeId,
+      ip,
+      marker: createSuccessMarker({
+        title: resolved.title,
+        url: finalUrl
+      }),
+      resultTtlSec: Number(injected.dedupResultTtlSec || 70)
+    });
+    await writeSessionView({
+      resolvedUrl: finalUrl,
+      title: resolved.title,
+      status: "resolved",
+      reason: "resolved_success"
+    });
+
+    return {
+      status: "ok",
+      title: resolved.title,
+      url: finalUrl
+    };
+  } finally {
+    await releaseInFlightLock({
+      redisCommand,
+      episodeId,
+      ip
+    });
+  }
 }
 
 async function resolveLatestStreamIntent(ip, episodeId, injected = {}) {
   let currentEpisodeId = episodeId;
 
   while (true) {
-    const intentKey = `${ip}:${currentEpisodeId}`;
-    const result = await getOrCreateInFlightIntent(intentKey, () => resolveStreamIntent(ip, currentEpisodeId, injected));
+    const result = await resolveStreamIntent(ip, currentEpisodeId, injected);
     const latest = getLatestSelection(ip);
 
     if (result.status === "stale" && latest && latest.episodeId !== currentEpisodeId) {

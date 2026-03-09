@@ -177,8 +177,14 @@ function createRedisRuntime() {
     }
 
     if (op === "SET") {
-      state.strings.set(key, String(command[2]));
-      result = "OK";
+      const value = String(command[2]);
+      const hasNx = command.slice(3).some((entry) => String(entry).toUpperCase() === "NX");
+      if (hasNx && state.strings.has(key)) {
+        result = null;
+      } else {
+        state.strings.set(key, value);
+        result = "OK";
+      }
     }
 
     if (op === "DEL") {
