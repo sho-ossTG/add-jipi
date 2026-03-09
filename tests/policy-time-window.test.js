@@ -1,8 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  createJerusalemClock,
-  getJerusalemInfo,
+  createBeirutClock,
+  getBeirutInfo,
   isWithinShutdownWindow
 } = require("../modules/policy/time-window");
 const { withFixedJerusalemTime } = require("./helpers/runtime-fixtures");
@@ -26,12 +26,12 @@ test("shutdown window boundaries are deterministic at exact Jerusalem times", ()
   }
 });
 
-test("Jerusalem info extraction uses injected clock deterministically", async () => {
+test("Beirut info extraction uses injected clock deterministically", async () => {
   await withFixedJerusalemTime(async () => {
-    const clock = createJerusalemClock({
+    const clock = createBeirutClock({
       now: () => new Date("2099-01-01T10:00:00.000Z")
     });
-    const info = getJerusalemInfo(clock);
+    const info = getBeirutInfo(clock);
 
     assert.equal(info.hour, 2);
     assert.equal(info.minute, 30);

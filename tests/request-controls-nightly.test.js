@@ -27,7 +27,7 @@ test("shutdown window still tracks blocked policy analytics and triggers nightly
       redisCommand,
       getTrustedClientIp: (request) => request && request.socket && request.socket.remoteAddress,
       timeWindow: {
-        getJerusalemInfo: () => ({ hour: 2, dateStr: "2099-01-02" }),
+        getBeirutInfo: () => ({ hour: 2, dateStr: "2099-01-02" }),
         isWithinShutdownWindow: () => true
       },
       runNightlyRollup: async (_redisCommand, input = {}) => {

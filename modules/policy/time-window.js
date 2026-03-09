@@ -1,8 +1,8 @@
-const DEFAULT_TIME_ZONE = "Asia/Jerusalem";
+const DEFAULT_TIME_ZONE = "Asia/Beirut";
 const DEFAULT_SHUTDOWN_START_HOUR = 0;
 const DEFAULT_SHUTDOWN_END_HOUR = 8;
 
-function createJerusalemClock(options = {}) {
+function createBeirutClock(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const timeZone = String(options.timeZone || DEFAULT_TIME_ZONE);
   return {
@@ -11,7 +11,7 @@ function createJerusalemClock(options = {}) {
   };
 }
 
-function getJerusalemInfo(clock = createJerusalemClock()) {
+function getBeirutInfo(clock = createBeirutClock()) {
   const date = clock.now();
   const formatter = new Intl.DateTimeFormat("en-GB", {
     timeZone: clock.timeZone,
@@ -59,7 +59,7 @@ function isWithinShutdownWindow(info, options = {}) {
 }
 
 module.exports = {
-  createJerusalemClock,
-  getJerusalemInfo,
+  createBeirutClock,
+  getBeirutInfo,
   isWithinShutdownWindow
 };

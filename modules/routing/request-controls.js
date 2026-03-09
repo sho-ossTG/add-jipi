@@ -54,16 +54,16 @@ async function applyRequestControls(input = {}, injected = {}) {
   }
 
   const timeWindow = injected.timeWindow || defaultTimeWindow;
-  const getJerusalemInfo =
-    typeof timeWindow.getJerusalemInfo === "function"
-      ? timeWindow.getJerusalemInfo
+  const getBeirutInfo =
+    typeof timeWindow.getBeirutInfo === "function"
+      ? timeWindow.getBeirutInfo
       : () => ({ hour: 0, dateStr: "" });
   const isWithinShutdownWindow =
     typeof timeWindow.isWithinShutdownWindow === "function"
       ? timeWindow.isWithinShutdownWindow
       : () => false;
 
-  const info = getJerusalemInfo(injected.clock || timeWindow.createJerusalemClock && timeWindow.createJerusalemClock());
+  const info = getBeirutInfo(injected.clock || timeWindow.createBeirutClock && timeWindow.createBeirutClock());
   const redisCommand = resolveRedisCommand(injected);
   const analyticsBucket = info && info.dateStr && Number.isFinite(info.hour)
     ? `${info.dateStr}-${String(info.hour).padStart(2, "0")}`
