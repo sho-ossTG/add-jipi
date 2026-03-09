@@ -368,6 +368,21 @@ async function createHttpHandler(req, res) {
       };
     }
 
+    const STUB_ENABLED = false;
+
+    function sendStubAwareDegradedStream(causeInput) {
+      sendDegradedStream(req, res, causeInput, {
+        ...streamRouteDependencies,
+        stubs: {
+          websiteHealthNotification: {
+            enabled: STUB_ENABLED,
+            route: pathname,
+            statusPath: "/health"
+          }
+        }
+      });
+    }
+
     emitTelemetry(EVENTS.REQUEST_START, {
       source: "policy",
       cause: "received",
@@ -413,16 +428,16 @@ async function createHttpHandler(req, res) {
           requestControlDependencies
         );
 
-        if (!controlResult.allowed) {
-          const deniedCause = classifyReliabilityCause(controlResult.reason || "blocked:slot_taken");
-          if (pathname.startsWith("/stream/")) {
-            setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "degraded" });
-            sendDegradedStream(req, res, controlResult.reason, streamRouteDependencies);
+          if (!controlResult.allowed) {
+            const deniedCause = classifyReliabilityCause(controlResult.reason || "blocked:slot_taken");
+            if (pathname.startsWith("/stream/")) {
+              setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "degraded" });
+              sendStubAwareDegradedStream(controlResult.reason);
+              return;
+            }
+            setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "failure" });
+            sendPublicError(req, res, 503);
             return;
-          }
-          setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "failure" });
-          sendPublicError(req, res, 503);
-          return;
         }
 
         if (pathname.startsWith("/stream/")) {
@@ -474,7 +489,7 @@ async function createHttpHandler(req, res) {
         const failure = classifyFailure({ error });
         if (pathname.startsWith("/stream/")) {
           setReliabilityOutcome({ source: failure.source, cause: failure.cause, result: "degraded" });
-          sendDegradedStream(req, res, error, streamRouteDependencies);
+          sendStubAwareDegradedStream(error);
           return;
         }
         setReliabilityOutcome({ source: failure.source, cause: failure.cause, result: "failure" });

@@ -45,6 +45,31 @@ function buildDegradedStreamPayload(causeInput, injected = {}) {
   };
 }
 
+function applyWebsiteHealthNotificationStub(basePayload, classification, injected = {}) {
+  const stubConfig = injected.stubs && injected.stubs.websiteHealthNotification;
+  const STUB_ENABLED = false;
+
+  if (!STUB_ENABLED || !stubConfig || !stubConfig.enabled) {
+    return basePayload;
+  }
+
+  const route = String(stubConfig.route || "/stream/...");
+  const statusPath = String(stubConfig.statusPath || "/health");
+  const healthMessage = "Website health notice: streaming is in degraded mode while upstream checks recover.";
+  const routeMessage = `Affected route: ${route}.`;
+
+  return {
+    ...basePayload,
+    notice: [healthMessage, routeMessage, `Live status endpoint: ${statusPath}.`].join(" "),
+    healthNotification: {
+      state: classification.cause || "dependency_unavailable",
+      title: "Stream temporarily degraded",
+      description: healthMessage,
+      statusPath
+    }
+  };
+}
+
 function sendDegradedStream(req, res, causeInput, injected = {}) {
   if (typeof injected.sendJson !== "function") {
     throw new Error("sendDegradedStream requires injected.sendJson");
@@ -65,7 +90,8 @@ function sendDegradedStream(req, res, causeInput, injected = {}) {
     });
   }
 
-  const payload = buildDegradedStreamPayload(causeInput, injected);
+  const basePayload = buildDegradedStreamPayload(causeInput, injected);
+  const payload = applyWebsiteHealthNotificationStub(basePayload, classification, injected);
   injected.sendJson(req, res, 200, payload);
   return payload;
 }
