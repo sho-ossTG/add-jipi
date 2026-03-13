@@ -24,7 +24,7 @@ const {
   incrementReliabilityCounter,
   readReliabilitySummary
 } = require("../../observability/metrics");
-const { trackHourlyEvent } = require("../analytics/hourly-tracker");
+const { trackHourlyEvent, toHourBucket } = require("../analytics/hourly-tracker");
 const { runNightlyRollup } = require("../analytics/nightly-rollup");
 
 function parsePositiveIntEnv(name, fallback) {
@@ -269,6 +269,66 @@ function handlePublicRoute(req, res, pathname) {
   return { handled: false };
 }
 
+function bucketToUtcHourIso(bucketInput) {
+  const bucket = String(bucketInput || "").trim();
+  const [year, month, day, hour] = bucket.split("-");
+  if (!year || !month || !day || !hour) {
+    return new Date().toISOString().slice(0, 13) + ":00:00Z";
+  }
+  return `${year}-${month}-${day}T${hour}:00:00Z`;
+}
+
+function toCount(value) {
+  const parsed = Number.parseInt(String(value == null ? "0" : value), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+async function handleStatsRoute(req, res, pathname) {
+  if (pathname !== "/api/stats") {
+    return { handled: false };
+  }
+
+  const method = String((req && req.method) || "GET").toUpperCase();
+  if (method !== "GET") {
+    sendJson(req, res, 405, { error: "method_not_allowed" });
+    return {
+      handled: true,
+      outcome: { source: "policy", cause: "method_not_allowed", result: "failure" }
+    };
+  }
+
+  const bucket = toHourBucket();
+  const hour = bucketToUtcHourIso(bucket);
+
+  try {
+    const [requestRaw, errorRaw] = await Promise.all([
+      redisCommand(["HGET", "analytics:hourly", `${bucket}|requests.total|count`]),
+      redisCommand(["HGET", "analytics:hourly", `${bucket}|policy.blocked|count`])
+    ]);
+
+    sendJson(req, res, 200, {
+      server: "A",
+      hour,
+      request_count: toCount(requestRaw),
+      error_count: toCount(errorRaw)
+    });
+
+    return {
+      handled: true,
+      outcome: { source: "redis", cause: "success", result: "success" }
+    };
+  } catch {
+    sendJson(req, res, 503, { error: "dependency_unavailable" });
+    return {
+      handled: true,
+      outcome: { source: "redis", cause: "dependency_unavailable", result: "failure" }
+    };
+  }
+}
+
 function classifyReliabilityCause(errorOrReason) {
   const classification = typeof errorOrReason === "string"
     ? classifyFailure({ reason: errorOrReason })
@@ -419,6 +479,12 @@ async function createHttpHandler(req, res) {
       const publicResult = handlePublicRoute(req, res, pathname);
       if (publicResult.handled) {
         setReliabilityOutcome(publicResult.outcome || {});
+        return;
+      }
+
+      const statsResult = await handleStatsRoute(req, res, pathname);
+      if (statsResult.handled) {
+        setReliabilityOutcome(statsResult.outcome || {});
         return;
       }
 
