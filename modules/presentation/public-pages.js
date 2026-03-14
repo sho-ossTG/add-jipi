@@ -7,7 +7,7 @@ function renderLandingPage() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>One Piece (Jipi) - Stremio Addon</title>
     <style>
-        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: url('https://images3.alphacoders.com/134/1342304.jpeg') no-repeat center center fixed; background-size: cover; color: white; display: flex; justify-content: center; align-items: flex-end; height: 100vh; text-align: center; }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #000 url('https://images3.alphacoders.com/134/1342304.jpeg') no-repeat center center fixed; background-size: contain; color: white; display: flex; justify-content: center; align-items: flex-end; height: 100vh; text-align: center; }
         .container { background: rgba(0, 0, 0, 0.65); padding: 1rem 2rem; width: 100%; box-sizing: border-box; }
         h1 { margin: 0 0 0.2rem 0; font-size: 1.3rem; }
         p { margin: 0 0 0.6rem 0; opacity: 0.85; font-size: 0.85rem; }
