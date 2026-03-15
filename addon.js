@@ -8,6 +8,8 @@ const manifest = {
   version: "1.0.0",
   name: "One Piece (Jipi)",
   description: "JIPI NAKAMA ANIMEISREAL ",
+  logo: "https://www.stickitup.xyz/cdn/shop/products/one-piece-logo-sticker-4857715.jpg?v=1771245370",
+  background: "https://www.stickitup.xyz/cdn/shop/products/one-piece-logo-sticker-4857715.jpg?v=1771245370",
   resources: ["catalog", "stream"],
   types: ["series"],
   catalogs: [{ type: "series", id: "onepiece_catalog", name: "One Piece" }],
