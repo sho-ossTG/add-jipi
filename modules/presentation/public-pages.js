@@ -25,7 +25,11 @@ function renderLandingPage() {
       window.si = window.si || function(){(window.si.q=window.si.q||[]).push(arguments)};
     </script>
     <script defer src="/_vercel/speed-insights/script.js"></script>
-</body>
+    <script>
+      window.va = window.va || function(){(window.vaq = window.vaq || []).push(arguments);};
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
+  </body>
 </html>
   `.trim();
 }
