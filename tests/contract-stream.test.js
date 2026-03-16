@@ -73,7 +73,7 @@ test("GET supported stream returns contract-valid HTTPS stream payload", async (
   assert.equal(stream.name, "Jipi");
   assert.equal(stream.title, "One Piece S1E1");
   assert.match(stream.url, /^https:\/\//);
-  assert.equal(stream.behaviorHints.notWebReady, true);
+  assert.equal(stream.behaviorHints.notWebReady, false);
 });
 
 test("GET stream route blocked by controls returns protocol-safe fallback stream", async () => {

@@ -130,14 +130,14 @@ test("policy-denied outcomes return shared fallback stream responses", async () 
     assert.equal(capacityResponse.body.streams.length, 1);
     assert.match(capacityResponse.body.streams[0].url, /^https:\/\//);
     assert.match(capacityResponse.body.streams[0].title, /Temporary load\. Try again in a few minutes\./);
-    assert.equal(capacityResponse.body.streams[0].behaviorHints.notWebReady, true);
+    assert.equal(capacityResponse.body.streams[0].behaviorHints.notWebReady, false);
     assert.equal(Object.prototype.hasOwnProperty.call(capacityResponse.body, "notice"), false);
 
     assert.equal(shutdownResponse.statusCode, 200);
     assert.equal(shutdownResponse.body.streams.length, 1);
     assert.match(shutdownResponse.body.streams[0].url, /^https:\/\//);
     assert.match(shutdownResponse.body.streams[0].title, /Temporary load\. Try again in a few minutes\./);
-    assert.equal(shutdownResponse.body.streams[0].behaviorHints.notWebReady, true);
+    assert.equal(shutdownResponse.body.streams[0].behaviorHints.notWebReady, false);
     assert.equal(Object.prototype.hasOwnProperty.call(shutdownResponse.body, "notice"), false);
   } finally {
     global.fetch = originalFetch;

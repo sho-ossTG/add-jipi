@@ -4,7 +4,7 @@ function formatStream(title, url) {
     title,
     url,
     behaviorHints: {
-      notWebReady: true
+      notWebReady: false
     }
   };
 }
