@@ -186,23 +186,36 @@ function getCorsPolicy() {
   };
 }
 
-function applyCors(req, res) {
+function getRequestPathname(req) {
+  try {
+    return new URL(req.url || "/", "http://localhost").pathname;
+  } catch {
+    return "/";
+  }
+}
+
+function applyCors(req, res, pathnameInput) {
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+  const pathname = String(pathnameInput || getRequestPathname(req));
   if (!origin) {
     return { hasOrigin: false, originAllowed: false };
   }
 
   const policy = getCorsPolicy();
-  if (!policy.origins.has(origin)) {
+  const allowStremioRoute = isStremioRoute(pathname);
+  if (!allowStremioRoute && !policy.origins.has(origin)) {
     return { hasOrigin: true, originAllowed: false };
   }
 
-  res.setHeader("Access-Control-Allow-Origin", origin);
+  const accessControlOrigin = allowStremioRoute ? "*" : origin;
+  res.setHeader("Access-Control-Allow-Origin", accessControlOrigin);
   const vary = String(res.getHeader ? res.getHeader("Vary") || "" : "");
-  const varyEntries = parseCsv(vary).map((item) => item.toLowerCase());
-  if (!varyEntries.includes("origin")) {
-    const nextVary = vary ? `${vary}, Origin` : "Origin";
-    res.setHeader("Vary", nextVary);
+  if (accessControlOrigin !== "*") {
+    const varyEntries = parseCsv(vary).map((item) => item.toLowerCase());
+    if (!varyEntries.includes("origin")) {
+      const nextVary = vary ? `${vary}, Origin` : "Origin";
+      res.setHeader("Vary", nextVary);
+    }
   }
   return { hasOrigin: true, originAllowed: true, policy };
 }
@@ -218,7 +231,8 @@ function sendJson(req, res, statusCode, payload) {
 function handlePreflight(req, res) {
   if (req.method !== "OPTIONS") return false;
 
-  const cors = applyCors(req, res);
+  const pathname = getRequestPathname(req);
+  const cors = applyCors(req, res, pathname);
   if (!cors.originAllowed) {
     res.statusCode = 204;
     res.end();
