@@ -249,16 +249,20 @@ function handlePreflight(req, res) {
 
   const requestedMethod = String(req.headers["access-control-request-method"] || "").trim().toUpperCase();
   if (requestedMethod && !cors.policy.methods.includes(requestedMethod)) {
-    res.statusCode = 403;
-    sendJson(req, res, 403, { error: "cors_method_not_allowed" });
+    sendJson(req, res, 403, {
+      error: "cors_method_not_allowed",
+      detail: "Requested method is not allowed by CORS policy."
+    });
     return true;
   }
 
   const requestedHeaders = parseCsv(req.headers["access-control-request-headers"]).map((item) => item.toLowerCase());
   const invalidHeader = requestedHeaders.find((header) => !cors.policy.headers.includes(header));
   if (invalidHeader) {
-    res.statusCode = 403;
-    sendJson(req, res, 403, { error: "cors_header_not_allowed" });
+    sendJson(req, res, 403, {
+      error: "cors_header_not_allowed",
+      detail: "Requested headers are not allowed by CORS policy."
+    });
     return true;
   }
 
@@ -270,7 +274,10 @@ function handlePreflight(req, res) {
 }
 
 function sendPublicError(req, res, statusCode = 503) {
-  sendJson(req, res, statusCode, { error: "service_unavailable" });
+  sendJson(req, res, statusCode, {
+    error: "service_unavailable",
+    detail: "Service temporarily unavailable."
+  });
 }
 
 function handlePublicRoute(req, res, pathname) {
@@ -341,7 +348,10 @@ async function handleStatsRoute(req, res, pathname) {
 
   const method = String((req && req.method) || "GET").toUpperCase();
   if (method !== "GET") {
-    sendJson(req, res, 405, { error: "method_not_allowed" });
+    sendJson(req, res, 405, {
+      error: "method_not_allowed",
+      detail: "Use GET for /api/stats."
+    });
     return {
       handled: true,
       outcome: { source: "policy", cause: "method_not_allowed", result: "failure" }

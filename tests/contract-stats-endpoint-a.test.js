@@ -66,5 +66,7 @@ test("non-GET /api/stats returns 405 with JSON error payload", withServerA(async
   const response = await request(handler, "/api/stats", { method: "POST" });
 
   assert.equal(response.statusCode, 405);
-  assert.deepEqual(response.body, { error: "method_not_allowed" });
+  assert.deepEqual(Object.keys(response.body).sort(), ["detail", "error"]);
+  assert.equal(response.body.error, "method_not_allowed");
+  assert.equal(response.body.detail, "Use GET for /api/stats.");
 }));
