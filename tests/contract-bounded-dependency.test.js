@@ -33,6 +33,26 @@ test("executeBoundedDependency retries once on transient failure", async () => {
   assert.equal(calls, 2);
 });
 
+test("executeBoundedDependency honors maxAttempts for transient failures", async () => {
+  let calls = 0;
+
+  const result = await executeBoundedDependency(async () => {
+    calls += 1;
+    if (calls < 3) {
+      const error = new Error("temporary failure");
+      error.statusCode = 503;
+      throw error;
+    }
+    return "ok";
+  }, {
+    jitterMs: 0,
+    maxAttempts: 3
+  });
+
+  assert.equal(result, "ok");
+  assert.equal(calls, 3);
+});
+
 test("executeBoundedDependency does not retry non-transient failure", async () => {
   let calls = 0;
 
@@ -41,7 +61,10 @@ test("executeBoundedDependency does not retry non-transient failure", async () =
     const error = new Error("bad request");
     error.statusCode = 400;
     throw error;
-  }, { jitterMs: 0 }), {
+  }, {
+    jitterMs: 0,
+    maxAttempts: 3
+  }), {
     message: "bad request"
   });
 

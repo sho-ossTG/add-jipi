@@ -1,6 +1,7 @@
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 60000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 60000;
 const DEFAULT_RETRY_JITTER_MS = 150;
+const DEFAULT_MAX_ATTEMPTS = 2;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,14 +23,19 @@ async function executeBoundedDependency(operation, options = {}) {
   const {
     attemptTimeoutMs = DEFAULT_ATTEMPT_TIMEOUT_MS,
     totalBudgetMs = DEFAULT_TOTAL_TIMEOUT_MS,
-    jitterMs = DEFAULT_RETRY_JITTER_MS
+    jitterMs = DEFAULT_RETRY_JITTER_MS,
+    maxAttempts = DEFAULT_MAX_ATTEMPTS
   } = options;
+  const parsedMaxAttempts = Number.parseInt(String(maxAttempts), 10);
+  const attemptLimit = Number.isFinite(parsedMaxAttempts) && parsedMaxAttempts > 0
+    ? parsedMaxAttempts
+    : DEFAULT_MAX_ATTEMPTS;
 
   const startedAt = Date.now();
   let attempt = 0;
   let lastError;
 
-  while (attempt < 2) {
+  while (attempt < attemptLimit) {
     const elapsed = Date.now() - startedAt;
     const remaining = totalBudgetMs - elapsed;
     if (remaining <= 0) {
@@ -44,7 +50,7 @@ async function executeBoundedDependency(operation, options = {}) {
       return await operation({ timeout });
     } catch (error) {
       lastError = error;
-      const canRetry = attempt === 0 && isTransientDependencyFailure(error);
+      const canRetry = attempt + 1 < attemptLimit && isTransientDependencyFailure(error);
       if (!canRetry) break;
 
       const postAttemptElapsed = Date.now() - startedAt;
