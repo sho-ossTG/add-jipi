@@ -73,6 +73,12 @@ function validateResolveResponse(payload) {
   };
 }
 
+function normalizeClientIp(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return normalized;
+}
+
 function createDClient(options = {}) {
   const env = options.env || process.env;
   const baseUrl = String(options.baseUrl || env.D_BASE_URL || "");
@@ -82,7 +88,7 @@ function createDClient(options = {}) {
   const totalBudgetMs = parsePositiveInteger(options.totalBudgetMs || env.D_TOTAL_TIMEOUT_MS, DEFAULT_TOTAL_TIMEOUT_MS);
   const jitterMs = parsePositiveInteger(options.jitterMs || env.D_RETRY_JITTER_MS, DEFAULT_RETRY_JITTER_MS);
 
-  async function resolveEpisode(episodeId) {
+  async function resolveEpisode(episodeId, options = {}) {
     const id = String(episodeId || "").trim();
     if (!id) {
       throw new Error("Missing episode id");
@@ -93,15 +99,21 @@ function createDClient(options = {}) {
 
     const resolveUrl = new URL("/api/resolve", baseUrl).toString();
 
+    const clientIp = normalizeClientIp(options.clientIp);
     let response;
     try {
       response = await boundedDependency(async ({ timeout }) => {
+        const headers = {
+          "content-type": "application/json",
+          "x-correlation-id": getCorrelationId()
+        };
+        if (clientIp) {
+          headers["x-client-ip"] = clientIp;
+        }
+
         const nextResponse = await fetchImpl(resolveUrl, {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-correlation-id": getCorrelationId()
-          },
+          headers,
           body: JSON.stringify({ episodeId: id }),
           signal: AbortSignal.timeout(timeout)
         });
@@ -142,24 +154,32 @@ function createDClient(options = {}) {
     return validateResolveResponse(data);
   }
 
-  function forwardUserAgent(userAgent, episodeId, { onFailure } = {}) {
+  function forwardUserAgent(userAgent, episodeId, { onFailure, clientIp } = {}) {
     if (!baseUrl) return;
 
     const uaUrl = new URL("/api/ua", baseUrl).toString();
 
     Promise.resolve()
-      .then(() => fetchImpl(uaUrl, {
-        method: "POST",
-        headers: {
+      .then(() => {
+        const headers = {
           "content-type": "application/json",
           "x-correlation-id": getCorrelationId()
-        },
-        body: JSON.stringify({
-          userAgent: String(userAgent || ""),
-          episodeId: String(episodeId || ""),
-          timestamp: new Date().toISOString()
-        })
-      }))
+        };
+        const normalizedIp = normalizeClientIp(clientIp);
+        if (normalizedIp) {
+          headers["x-client-ip"] = normalizedIp;
+        }
+
+        return fetchImpl(uaUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            userAgent: String(userAgent || ""),
+            episodeId: String(episodeId || ""),
+            timestamp: new Date().toISOString()
+          })
+        });
+      })
       .catch((error) => {
         if (typeof onFailure === "function") {
           try {

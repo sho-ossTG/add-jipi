@@ -258,7 +258,7 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
     const resolveEpisode = resolveEpisodeResolver(injected);
     let resolved;
     try {
-      resolved = await resolveEpisode(episodeId);
+      resolved = await resolveEpisode(episodeId, { clientIp: ip });
     } catch (error) {
       const classifyFailure = typeof injected.classifyFailure === "function"
         ? injected.classifyFailure
@@ -435,6 +435,72 @@ async function handleStreamRequest(input = {}, injected = {}) {
     correlationId: req && req.headers && (req.headers["x-correlation-id"] || req.headers["X-Correlation-Id"]) || ""
   };
 
+  if (injected.disableUpstashRecords) {
+    try {
+      if (typeof injected.sendJson !== "function") {
+        throw new Error("handleStreamRequest requires injected.sendJson");
+      }
+
+      const resolveEpisode = resolveEpisodeResolver(streamInjected);
+      const resolved = await resolveEpisode(episodeId);
+      const finalUrl = typeof resolved.url === "string"
+        ? resolved.url.replace(/^http:\/\//, "https://")
+        : "";
+
+      if (!finalUrl.startsWith("https://")) {
+        sendDegradedStream(req, res, "validation_invalid_stream_url", injected);
+        return {
+          handled: true,
+          outcome: {
+            source: "validation",
+            cause: "validation_invalid_stream_url",
+            result: "degraded"
+          }
+        };
+      }
+
+      const formatStreamLocal = injected.formatStream || streamPayloads.formatStream;
+      injected.sendJson(req, res, 200, {
+        streams: [formatStreamLocal(resolved.title, finalUrl)]
+      });
+
+      const forwardUserAgent = resolveForwardUserAgent(streamInjected);
+      Promise.resolve()
+        .then(() => forwardUserAgent(requestUserAgent, episodeId, {
+          onFailure: (error) => {
+            logger.warn({
+              episodeId,
+              userAgent: requestUserAgent,
+              errorCode: String(error && error.code || "ua_forward_error"),
+              errorMessage: String(error && error.message || "Unknown UA forward error")
+            }, "ua_forward_failed");
+          }
+        }))
+        .catch(() => {});
+
+      return {
+        handled: true,
+        outcome: {
+          source: "d",
+          cause: "success",
+          result: "success"
+        }
+      };
+    } catch (error) {
+      sendDegradedStream(req, res, error, injected);
+      const classifyFailure = injected.classifyFailure || ((value) => ({ source: "d", cause: value.error ? "dependency_unavailable" : "dependency_unavailable" }));
+      const degraded = classifyFailure({ error, source: "d" });
+      return {
+        handled: true,
+        outcome: {
+          source: degraded.source,
+          cause: degraded.cause,
+          result: "degraded"
+        }
+      };
+    }
+  }
+
   markLatestSelection(ip, episodeId);
 
   try {
@@ -483,6 +549,7 @@ async function handleStreamRequest(input = {}, injected = {}) {
     const forwardUserAgent = resolveForwardUserAgent(streamInjected);
     Promise.resolve()
       .then(() => forwardUserAgent(requestUserAgent, episodeId, {
+        clientIp: ip,
         onFailure: (error) => {
           logger.warn({
             episodeId,

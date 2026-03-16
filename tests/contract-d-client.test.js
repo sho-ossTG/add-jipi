@@ -74,7 +74,7 @@ test("forwardUserAgent sends expected payload and stays fire-and-forget safe", a
 
   const runInContext = withRequestContext(
     { headers: { "x-correlation-id": "cid-ua-123" } },
-    () => client.forwardUserAgent("MyAgent/1.0", "tt123:1:2")
+    () => client.forwardUserAgent("MyAgent/1.0", "tt123:1:2", { clientIp: "198.51.100.10" })
   );
 
   assert.equal(callCount, 0);
@@ -87,6 +87,7 @@ test("forwardUserAgent sends expected payload and stays fire-and-forget safe", a
   assert.equal(captured.options.method, "POST");
   assert.equal(captured.options.headers["content-type"], "application/json");
   assert.equal(captured.options.headers["x-correlation-id"], "cid-ua-123");
+  assert.equal(captured.options.headers["x-client-ip"], "198.51.100.10");
 
   const payload = JSON.parse(captured.options.body);
   assert.equal(payload.userAgent, "MyAgent/1.0");
@@ -110,12 +111,13 @@ test("resolveEpisode includes x-correlation-id header on D resolve request", asy
 
   const result = await withRequestContext(
     { headers: { "x-correlation-id": "cid-resolve-123" } },
-    async () => client.resolveEpisode("tt123:1:2")
+    async () => client.resolveEpisode("tt123:1:2", { clientIp: "198.51.100.11" })
   );
 
   assert.equal(captured.url, "https://d.example/api/resolve");
   assert.equal(captured.options.headers["content-type"], "application/json");
   assert.equal(captured.options.headers["x-correlation-id"], "cid-resolve-123");
+  assert.equal(captured.options.headers["x-client-ip"], "198.51.100.11");
   assert.deepEqual(result, { url: "https://ok.test/stream.m3u8", title: "episode.mp4" });
 });
 

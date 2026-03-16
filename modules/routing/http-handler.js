@@ -24,8 +24,7 @@ const {
   incrementReliabilityCounter,
   readReliabilitySummary
 } = require("../../observability/metrics");
-const { trackHourlyEvent, toHourBucket } = require("../analytics/hourly-tracker");
-const { runNightlyRollup } = require("../analytics/nightly-rollup");
+const { toHourBucket } = require("../analytics/hourly-tracker");
 
 function parsePositiveIntEnv(name, fallback) {
   const raw = process.env[name];
@@ -36,6 +35,14 @@ function parsePositiveIntEnv(name, fallback) {
   return parsed;
 }
 
+function parseBooleanEnv(name, fallback) {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  if (!raw) return fallback;
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
+  return fallback;
+}
+
 const SLOT_TTL = parsePositiveIntEnv("SLOT_TTL_SEC", 3600);
 const INACTIVITY_LIMIT = parsePositiveIntEnv("INACTIVITY_LIMIT_SEC", 20 * 60);
 const MAX_SESSIONS = parsePositiveIntEnv("MAX_SESSIONS", 2);
@@ -43,6 +50,7 @@ const RECONNECT_GRACE_MS = parsePositiveIntEnv("RECONNECT_GRACE_MS", 15000);
 const ROTATION_IDLE_MS = parsePositiveIntEnv("ROTATION_IDLE_MS", 45000);
 const SESSION_VIEW_TTL_SEC = parsePositiveIntEnv("SESSION_VIEW_TTL_SEC", 20 * 60);
 const HOURLY_ANALYTICS_TTL_SEC = parsePositiveIntEnv("HOURLY_ANALYTICS_TTL_SEC", 36 * 3600);
+const DISABLE_UPSTASH_RECORDS = parseBooleanEnv("DISABLE_UPSTASH_RECORDS", true);
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
 const DEFAULT_TRUST_PROXY = "loopback,linklocal,uniquelocal";
@@ -300,6 +308,32 @@ function toCount(value) {
   return parsed;
 }
 
+let statsBucket = toHourBucket();
+let statsRequestCount = 0;
+let statsErrorCount = 0;
+
+function rollStatsBucketIfNeeded() {
+  const nextBucket = toHourBucket();
+  if (nextBucket !== statsBucket) {
+    statsBucket = nextBucket;
+    statsRequestCount = 0;
+    statsErrorCount = 0;
+  }
+}
+
+function markStatsRequest() {
+  rollStatsBucketIfNeeded();
+  statsRequestCount += 1;
+}
+
+function markStatsError(statusCode) {
+  rollStatsBucketIfNeeded();
+  const numericStatus = Number(statusCode || 0);
+  if (numericStatus >= 400) {
+    statsErrorCount += 1;
+  }
+}
+
 async function handleStatsRoute(req, res, pathname) {
   if (pathname !== "/api/stats") {
     return { handled: false };
@@ -314,33 +348,20 @@ async function handleStatsRoute(req, res, pathname) {
     };
   }
 
-  const bucket = toHourBucket();
-  const hour = bucketToUtcHourIso(bucket);
+  rollStatsBucketIfNeeded();
+  const hour = bucketToUtcHourIso(statsBucket);
 
-  try {
-    const [requestRaw, errorRaw] = await Promise.all([
-      redisCommand(["HGET", "analytics:hourly", `${bucket}|requests.total|count`]),
-      redisCommand(["HGET", "analytics:hourly", `${bucket}|policy.blocked|count`])
-    ]);
+  sendJson(req, res, 200, {
+    server: "A",
+    hour,
+    request_count: toCount(statsRequestCount),
+    error_count: toCount(statsErrorCount)
+  });
 
-    sendJson(req, res, 200, {
-      server: "A",
-      hour,
-      request_count: toCount(requestRaw),
-      error_count: toCount(errorRaw)
-    });
-
-    return {
-      handled: true,
-      outcome: { source: "redis", cause: "success", result: "success" }
-    };
-  } catch {
-    sendJson(req, res, 503, { error: "dependency_unavailable" });
-    return {
-      handled: true,
-      outcome: { source: "redis", cause: "dependency_unavailable", result: "failure" }
-    };
-  }
+  return {
+    handled: true,
+    outcome: { source: "policy", cause: "success", result: "success" }
+  };
 }
 
 function classifyReliabilityCause(errorOrReason) {
@@ -366,6 +387,10 @@ function normalizeReliabilitySource(source, cause) {
 }
 
 async function recordReliabilityOutcome(routeClass, payload = {}) {
+  if (DISABLE_UPSTASH_RECORDS) {
+    return;
+  }
+
   const labels = {
     source: normalizeReliabilitySource(payload.source || "policy", payload.cause),
     cause: payload.cause || "success",
@@ -393,9 +418,7 @@ const requestControlDependencies = Object.freeze({
   maxSessions: MAX_SESSIONS,
   reconnectGraceMs: RECONNECT_GRACE_MS,
   rotationIdleMs: ROTATION_IDLE_MS,
-  hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC,
-  trackHourlyEvent,
-  runNightlyRollup
+  hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
 });
 
 function getAddonInterface() {
@@ -413,10 +436,10 @@ function buildStreamRouteDependencies() {
     events: EVENTS,
     degradedPolicy: DEGRADED_STREAM_POLICY,
     fallbackVideoUrl: TEST_VIDEO_URL,
+    disableUpstashRecords: DISABLE_UPSTASH_RECORDS,
     sessionViewTtlSec: SESSION_VIEW_TTL_SEC,
     inactivityLimitSec: INACTIVITY_LIMIT,
-    hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC,
-    trackHourlyEvent
+    hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
   };
 }
 
@@ -429,6 +452,10 @@ async function createHttpHandler(req, res) {
     const startedAt = Date.now();
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const pathname = reqUrl.pathname;
+    const shouldTrackStats = pathname !== "/api/stats" && String(req.method || "GET").toUpperCase() !== "OPTIONS";
+    if (shouldTrackStats) {
+      markStatsRequest();
+    }
     const routeType = classifyRoute(pathname);
     const streamEpisodeId = parseStreamEpisodeId(pathname);
     const streamUserAgent = String(req.headers["user-agent"] || "");
@@ -503,10 +530,12 @@ async function createHttpHandler(req, res) {
       }
 
       try {
-        const controlResult = await applyRequestControls(
-          { req, pathname },
-          requestControlDependencies
-        );
+        const controlResult = DISABLE_UPSTASH_RECORDS
+          ? { allowed: true, ip: getTrustedClientIp(req) }
+          : await applyRequestControls(
+            { req, pathname },
+            requestControlDependencies
+          );
 
           if (!controlResult.allowed) {
             const deniedCause = classifyReliabilityCause(controlResult.reason || "blocked:slot_taken");
@@ -531,6 +560,9 @@ async function createHttpHandler(req, res) {
             {
               ...streamRouteDependencies,
               onStreamError: async ({ error, ip, episodeId }) => {
+                if (DISABLE_UPSTASH_RECORDS) {
+                  return;
+                }
                 try {
                   await redisCommand(["INCR", "stats:d_error"]);
                 } catch {
@@ -552,6 +584,9 @@ async function createHttpHandler(req, res) {
                 }
               },
               onUaForwardError: async () => {
+                if (DISABLE_UPSTASH_RECORDS) {
+                  return;
+                }
                 try {
                   await redisCommand(["INCR", "stats:ua_forward_error"]);
                 } catch {
@@ -590,6 +625,10 @@ async function createHttpHandler(req, res) {
       });
     } finally {
       const fallbackResult = normalizeReliabilityResult(res.statusCode, "success");
+      if (shouldTrackStats) {
+        markStatsError(res.statusCode);
+      }
+
       await recordReliabilityOutcome(routeType, {
         source: reliabilityOutcome && reliabilityOutcome.source,
         cause: reliabilityOutcome && reliabilityOutcome.cause,
