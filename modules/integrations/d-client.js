@@ -1,5 +1,7 @@
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 5000;
-const DEFAULT_TOTAL_TIMEOUT_MS = 67000;
+// Timeout chain lock: C 57s < B 58s < D 65s < A 65s per attempt.
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 65000;
+// A keeps a 200s total budget so transient failures can use three 65s attempts.
+const DEFAULT_TOTAL_TIMEOUT_MS = 200000;
 const DEFAULT_RETRY_JITTER_MS = 150;
 const { executeBoundedDependency } = require("./bounded-dependency");
 const { getCorrelationId } = require("../../observability/context");
@@ -164,7 +166,8 @@ function createDClient(options = {}) {
       }, {
         attemptTimeoutMs,
         totalBudgetMs,
-        jitterMs
+        jitterMs,
+        maxAttempts: 3
       });
     } catch (error) {
       if (error && (error.code === "dependency_timeout" || error.code === "validation_error" || error.code === "dependency_unavailable")) {

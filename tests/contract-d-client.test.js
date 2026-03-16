@@ -280,8 +280,9 @@ test("resolveEpisode uses D timeout defaults with bounded dependency", async () 
   await client.resolveEpisode("tt123:1:2");
 
   assert.deepEqual(observedOptions, {
-    attemptTimeoutMs: 5000,
-    totalBudgetMs: 67000,
-    jitterMs: 150
+    attemptTimeoutMs: 65000,
+    totalBudgetMs: 200000,
+    jitterMs: 150,
+    maxAttempts: 3
   });
 });
