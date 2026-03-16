@@ -33,6 +33,34 @@ const EVENT_CATEGORY_MAP = Object.freeze({
   [EVENTS.REQUEST_COMPLETE]: CATEGORIES.COMPLETION
 });
 
+const FAILURE_EVENTS = new Set([
+  EVENTS.DEPENDENCY_FAILURE,
+  EVENTS.REQUEST_DEGRADED
+]);
+
+function normalizeErrorValue(payload = {}, cause = "") {
+  const rawError = typeof payload.error === "string" ? payload.error.trim() : "";
+  if (rawError) return rawError;
+  const rawCause = String(cause || "").trim();
+  if (rawCause) return rawCause;
+  return "dependency_unavailable";
+}
+
+function normalizeDetailValue(payload = {}, cause = "") {
+  const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+  if (detail) return detail;
+
+  const message = typeof payload.message === "string" ? payload.message.trim() : "";
+  if (message) return message;
+
+  if (payload.error && typeof payload.error === "object") {
+    const errorMessage = String(payload.error.message || payload.error.code || "").trim();
+    if (errorMessage) return errorMessage;
+  }
+
+  return `Failure classified as ${String(cause || "dependency_unavailable")}.`;
+}
+
 function normalizeSource(sourceValue, causeValue) {
   const source = String(sourceValue || "").toLowerCase();
   if (Object.values(SOURCES).includes(source)) {
@@ -92,7 +120,7 @@ function classifyFailure(input = {}) {
 function buildEvent(eventName, payload = {}) {
   const derived = classifyFailure(payload);
   const cause = payload.cause || derived.cause;
-  return {
+  const event = {
     ...payload,
     event: eventName,
     category: payload.category || EVENT_CATEGORY_MAP[eventName] || CATEGORIES.REQUEST,
@@ -100,6 +128,13 @@ function buildEvent(eventName, payload = {}) {
     cause,
     correlationId: payload.correlationId || getCorrelationId()
   };
+
+  if (FAILURE_EVENTS.has(eventName)) {
+    event.error = normalizeErrorValue(payload, cause);
+    event.detail = normalizeDetailValue(payload, cause);
+  }
+
+  return event;
 }
 
 function emitEvent(logger, eventName, payload = {}) {

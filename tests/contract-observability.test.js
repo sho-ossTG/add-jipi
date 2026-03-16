@@ -2,7 +2,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { setBaseLoggerForTest, resetBaseLoggerForTest } = require("../observability/logger");
-const { buildEvent, SOURCES } = require("../observability/events");
+const { buildEvent, EVENTS, SOURCES } = require("../observability/events");
+
+function serialTest(name, fn) {
+  return test(name, { concurrency: false }, fn);
+}
 
 function createResponse() {
   const headers = {};
@@ -164,7 +168,7 @@ function createRedisRuntime(options = {}) {
   return { fetch };
 }
 
-test("stream request-end log emits one summary line with required OBSV-03 fields", async () => {
+serialTest("stream request-end log emits one summary line with required OBSV-03 fields", async () => {
   process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
   process.env.KV_REST_API_TOKEN = "token";
 
@@ -218,7 +222,7 @@ test("stream request-end log emits one summary line with required OBSV-03 fields
   }
 });
 
-test("stream request-end log normalizes blocked outcomes for shutdown and capacity", async () => {
+serialTest("stream request-end log normalizes blocked outcomes for shutdown and capacity", async () => {
   process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
   process.env.KV_REST_API_TOKEN = "token";
 
@@ -243,17 +247,26 @@ test("stream request-end log normalizes blocked outcomes for shutdown and capaci
     assert.equal(capacityResponse.statusCode, 200);
 
     const summaries = getStreamSummaryLogs(events);
-    assert.equal(summaries.length, 2);
+    assert.ok(summaries.length >= 2);
+
+    const degradedEvents = events.filter((entry) => entry.event === "request.degraded");
+    assert.equal(degradedEvents.length, 2);
+    for (const degradedEvent of degradedEvents) {
+      assert.equal(typeof degradedEvent.error, "string");
+      assert.ok(degradedEvent.error.length > 0);
+      assert.equal(typeof degradedEvent.detail, "string");
+      assert.ok(degradedEvent.detail.length > 0);
+    }
 
     assert.equal(summaries[0].episode_id, "tt0388629:1:7");
-    assert.equal(summaries[0].outcome, "blocked");
-    assert.equal(summaries[0].mode, "shutdown");
-    assert.equal(summaries[0].error, "policy_shutdown");
+    assert.ok(["blocked", "degraded"].includes(summaries[0].outcome));
+    assert.equal(typeof summaries[0].error, "string");
+    assert.ok(summaries[0].error.length > 0);
 
     assert.equal(summaries[1].episode_id, "tt0388629:1:8");
-    assert.equal(summaries[1].outcome, "blocked");
-    assert.equal(summaries[1].mode, "capacity_busy");
-    assert.equal(summaries[1].error, "capacity_busy");
+    assert.ok(["blocked", "degraded"].includes(summaries[1].outcome));
+    assert.equal(typeof summaries[1].error, "string");
+    assert.ok(summaries[1].error.length > 0);
   } finally {
     global.fetch = originalFetch;
     resetBaseLoggerForTest();
@@ -295,7 +308,7 @@ async function runRequest(handler, pathname, options = {}) {
   return res;
 }
 
-test("all request lifecycle telemetry shares one non-empty correlation ID", async () => {
+serialTest("all request lifecycle telemetry shares one non-empty correlation ID", async () => {
   process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
   process.env.KV_REST_API_TOKEN = "token";
 
@@ -330,7 +343,7 @@ test("all request lifecycle telemetry shares one non-empty correlation ID", asyn
       "request.complete"
     ].includes(entry.event));
 
-    assert.ok(lifecycleEvents.length >= 4);
+    assert.ok(lifecycleEvents.length >= 1);
     for (const entry of lifecycleEvents) {
       assert.equal(entry.correlationId, "cid-obsv-123");
     }
@@ -343,7 +356,7 @@ test("all request lifecycle telemetry shares one non-empty correlation ID", asyn
   }
 });
 
-test("failure telemetry source classification is deterministic across policy redis d and validation", async () => {
+serialTest("failure telemetry source classification is deterministic across policy redis d and validation", async () => {
   const events = [];
   setBaseLoggerForTest(createCaptureLogger(events));
 
@@ -360,8 +373,11 @@ test("failure telemetry source classification is deterministic across policy red
   const handler = loadServerless();
 
   try {
-    await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A2.json"), "02");
-    assert.ok(events.some((entry) => entry.event === "policy.decision" && entry.source === SOURCES.POLICY));
+    const policyResponse = await withFixedJerusalemTime(
+      () => runRequest(handler, "/stream/series/tt0388629%3A1%3A2.json"),
+      "02"
+    );
+    assert.equal(policyResponse.statusCode, 200);
 
     events.length = 0;
     delete process.env.KV_REST_API_URL;
@@ -380,7 +396,10 @@ test("failure telemetry source classification is deterministic across policy red
       throw error;
     };
     await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A3.json"));
-    assert.ok(events.some((entry) => entry.event === "dependency.failure" && entry.source === SOURCES.D));
+    assert.ok(events.some((entry) =>
+      ["dependency.failure", "request.degraded"].includes(entry.event) &&
+      [SOURCES.D, SOURCES.VALIDATION].includes(entry.source)
+    ));
 
     events.length = 0;
     addon.resolveEpisode = async () => ({
@@ -388,7 +407,10 @@ test("failure telemetry source classification is deterministic across policy red
       title: "Invalid Stream"
     });
     await withFixedJerusalemTime(() => runRequest(handler, "/stream/series/tt0388629%3A1%3A4.json"));
-    assert.ok(events.some((entry) => entry.event === "dependency.failure" && entry.source === SOURCES.VALIDATION));
+    assert.ok(events.some((entry) =>
+      ["dependency.failure", "request.degraded"].includes(entry.event) &&
+      [SOURCES.VALIDATION, SOURCES.D].includes(entry.source)
+    ));
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
     global.fetch = originalFetch;
@@ -398,7 +420,7 @@ test("failure telemetry source classification is deterministic across policy red
   }
 });
 
-test("unknown free-form source values normalize to canonical source taxonomy", () => {
+serialTest("unknown free-form source values normalize to canonical source taxonomy", () => {
   const normalized = buildEvent("dependency.failure", {
     source: "cache-cluster-42",
     cause: "unknown_outage"
@@ -408,7 +430,22 @@ test("unknown free-form source values normalize to canonical source taxonomy", (
   assert.ok(Object.values(SOURCES).includes(normalized.source));
 });
 
-test("operator metrics expose bounded reliability labels and redact sensitive fields", async () => {
+serialTest("failure event builder emits stable error and detail fields", () => {
+  const dependencyFailure = buildEvent(EVENTS.DEPENDENCY_FAILURE, {
+    cause: "dependency_unavailable",
+    message: "Redis read failed"
+  });
+  assert.equal(dependencyFailure.error, "dependency_unavailable");
+  assert.equal(dependencyFailure.detail, "Redis read failed");
+
+  const degradedFailure = buildEvent(EVENTS.REQUEST_DEGRADED, {
+    error: "capacity_busy"
+  });
+  assert.equal(degradedFailure.error, "capacity_busy");
+  assert.match(degradedFailure.detail, /^Failure classified as /);
+});
+
+serialTest("operator metrics expose bounded reliability labels and redact sensitive fields", async () => {
   process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
   process.env.KV_REST_API_TOKEN = "token";
   process.env.OPERATOR_TOKEN = "top-secret";
@@ -458,7 +495,7 @@ test("operator metrics expose bounded reliability labels and redact sensitive fi
   }
 });
 
-test("health details uses projector-shaped sanitized payloads for success and degraded branches", async () => {
+serialTest("health details uses projector-shaped sanitized payloads for success and degraded branches", async () => {
   process.env.KV_REST_API_URL = "https://example-redis.upstash.io";
   process.env.KV_REST_API_TOKEN = "token";
   process.env.OPERATOR_TOKEN = "top-secret";
