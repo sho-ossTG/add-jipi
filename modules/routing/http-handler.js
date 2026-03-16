@@ -24,7 +24,16 @@ const {
   incrementReliabilityCounter,
   readReliabilitySummary
 } = require("../../observability/metrics");
-const { toHourBucket } = require("../analytics/hourly-tracker");
+
+function toHourBucket(options = {}) {
+  const nowMs = Number(options.nowMs || Date.now());
+  const now = new Date(nowMs);
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const hour = String(now.getUTCHours()).padStart(2, "0");
+  return `${year}-${month}-${day}-${hour}`;
+}
 
 function parsePositiveIntEnv(name, fallback) {
   const raw = process.env[name];
@@ -50,7 +59,8 @@ const RECONNECT_GRACE_MS = parsePositiveIntEnv("RECONNECT_GRACE_MS", 15000);
 const ROTATION_IDLE_MS = parsePositiveIntEnv("ROTATION_IDLE_MS", 45000);
 const SESSION_VIEW_TTL_SEC = parsePositiveIntEnv("SESSION_VIEW_TTL_SEC", 20 * 60);
 const HOURLY_ANALYTICS_TTL_SEC = parsePositiveIntEnv("HOURLY_ANALYTICS_TTL_SEC", 36 * 3600);
-const DISABLE_UPSTASH_RECORDS = parseBooleanEnv("DISABLE_UPSTASH_RECORDS", true);
+const HAS_REDIS_CONFIG = Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
+const DISABLE_UPSTASH_RECORDS = parseBooleanEnv("DISABLE_UPSTASH_RECORDS", !HAS_REDIS_CONFIG);
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
 const DEFAULT_TRUST_PROXY = "loopback,linklocal,uniquelocal";

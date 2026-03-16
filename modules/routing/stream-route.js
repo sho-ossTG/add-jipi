@@ -1,6 +1,5 @@
 const { createDClient } = require("../integrations/d-client");
 const defaultStreamPayloads = require("../presentation/stream-payloads");
-const { upsertSessionView } = require("../analytics/session-view");
 const {
   acquireInFlightLock,
   createDegradedMarker,
@@ -132,7 +131,10 @@ async function resolveStreamIntent(ip, episodeId, injected = {}) {
   const redisCommand = injected.redisCommand;
 
   async function writeSessionView(state = {}) {
-    const tracker = typeof injected.trackSessionView === "function" ? injected.trackSessionView : upsertSessionView;
+    const tracker = typeof injected.trackSessionView === "function" ? injected.trackSessionView : null;
+    if (!tracker) {
+      return;
+    }
     const ttlSec = Number(injected.sessionViewTtlSec || injected.inactivityLimitSec || INACTIVITY_LIMIT);
     await tracker(redisCommand, {
       ip,
@@ -509,8 +511,9 @@ async function handleStreamRequest(input = {}, injected = {}) {
     if (result.status === "degraded") {
       const classifyFailure = injected.classifyFailure || ((value) => ({ source: "d", cause: value.reason || "dependency_unavailable" }));
       const degraded = classifyFailure({ reason: result.cause || "dependency_unavailable", source: "d" });
-      try {
-        await upsertSessionView(injected.redisCommand, {
+      if (typeof injected.trackSessionView === "function") {
+        try {
+          await injected.trackSessionView(injected.redisCommand, {
           ip,
           userAgent: requestUserAgent,
           route: pathname,
@@ -522,8 +525,9 @@ async function handleStreamRequest(input = {}, injected = {}) {
         }, {
           ttlSec: Number(injected.sessionViewTtlSec || injected.inactivityLimitSec || INACTIVITY_LIMIT)
         });
-      } catch {
-        // Best-effort session snapshot path.
+        } catch {
+          // Best-effort session snapshot path.
+        }
       }
 
       sendDegradedStream(req, res, result.cause, injected);
@@ -599,8 +603,9 @@ async function handleStreamRequest(input = {}, injected = {}) {
       await injected.onStreamError({ error, ip, episodeId });
     }
 
-    try {
-      await upsertSessionView(injected.redisCommand, {
+    if (typeof injected.trackSessionView === "function") {
+      try {
+        await injected.trackSessionView(injected.redisCommand, {
         ip,
         userAgent: requestUserAgent,
         route: pathname,
@@ -612,8 +617,9 @@ async function handleStreamRequest(input = {}, injected = {}) {
       }, {
         ttlSec: Number(injected.sessionViewTtlSec || injected.inactivityLimitSec || INACTIVITY_LIMIT)
       });
-    } catch {
-      // Best-effort session snapshot path.
+      } catch {
+        // Best-effort session snapshot path.
+      }
     }
 
     sendDegradedStream(req, res, error, injected);

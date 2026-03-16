@@ -4,18 +4,62 @@ const {
   projectMetricsDiagnostics
 } = require("../presentation/operator-diagnostics");
 const { renderQuarantinePage } = require("../presentation/quarantine-page");
-const { toHourBucket } = require("../analytics/hourly-tracker");
-const {
-  readActiveSessionCount
-} = require("../analytics/session-view");
-const {
-  listDailySummaryDays,
-  readDailySummary
-} = require("../analytics/daily-summary-store");
-const { runNightlyRollup } = require("../analytics/nightly-rollup");
 const { getLogger } = require("../../observability/logger");
 
 const logger = getLogger({ component: "operator-routes" });
+
+function toHourBucket(options = {}) {
+  const nowMs = Number(options.nowMs || Date.now());
+  const now = new Date(nowMs);
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const hour = String(now.getUTCHours()).padStart(2, "0");
+  return `${year}-${month}-${day}-${hour}`;
+}
+
+async function readActiveSessionCount(redisCommand) {
+  if (typeof redisCommand !== "function") {
+    return 0;
+  }
+
+  const count = await redisCommand(["ZCARD", "system:active_sessions"]);
+  const parsed = Number(count || 0);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+async function listDailySummaryDays(redisCommand) {
+  if (typeof redisCommand !== "function") {
+    return [];
+  }
+
+  const days = await redisCommand(["ZRANGE", "analytics:daily:days", "0", "-1"]);
+  if (!Array.isArray(days)) {
+    return [];
+  }
+
+  return days.map((day) => String(day || "")).filter(Boolean);
+}
+
+async function readDailySummary(redisCommand, day) {
+  if (typeof redisCommand !== "function" || !day) {
+    return null;
+  }
+
+  const raw = await redisCommand(["GET", `analytics:daily:summary:${day}`]);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(String(raw));
+  } catch {
+    return null;
+  }
+}
 
 function isValidDay(day) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
@@ -215,9 +259,7 @@ async function handleOperatorRoute(input = {}, injected = {}) {
       const hourlyRaw = await redisCommand(["HGETALL", hourlyKey]);
       const hourlyMap = parseHourlySnapshot(hourlyRaw, hourBucket);
 
-      const activeSessionViews = await readActiveSessionCount(redisCommand, {
-        ttlSec: injected.sessionViewTtlSec
-      });
+      const activeSessionViews = await readActiveSessionCount(redisCommand);
       const dailyDays = await listDailySummaryDays(redisCommand);
       const latestDay = dailyDays.length ? dailyDays[dailyDays.length - 1] : null;
       const latestSummary = latestDay ? await readDailySummary(redisCommand, latestDay) : null;
@@ -250,11 +292,16 @@ async function handleOperatorRoute(input = {}, injected = {}) {
         throw new Error("handleOperatorRoute requires injected.redisCommand for /operator/rollup/nightly");
       }
 
+      if (typeof injected.runNightlyRollup !== "function") {
+        sendJson(req, res, 501, { error: "not_supported" });
+        return { handled: true, outcome: { source: "policy", cause: "not_supported", result: "failure" } };
+      }
+
       const reqUrl = new URL(req.url || "/operator/rollup/nightly", "http://localhost");
       const day = String(reqUrl.searchParams.get("day") || "").trim();
       const now = new Date();
       const defaultDay = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
-      const result = await runNightlyRollup(redisCommand, {
+      const result = await injected.runNightlyRollup(redisCommand, {
         day: day || defaultDay,
         force: reqUrl.searchParams.get("force") === "1"
       });
