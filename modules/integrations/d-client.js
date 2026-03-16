@@ -79,6 +79,43 @@ function normalizeClientIp(value) {
   return normalized;
 }
 
+function validateErrorEnvelope(payload, statusCode) {
+  if (!payload || typeof payload !== "object") {
+    throw createError("D returned invalid error payload", "validation_error", statusCode);
+  }
+
+  const error = typeof payload.error === "string" ? payload.error.trim() : "";
+  const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+  if (!error || !detail) {
+    throw createError("D returned invalid error payload", "validation_error", statusCode);
+  }
+
+  return { error, detail };
+}
+
+async function parseErrorEnvelope(response) {
+  const statusCode = Number(response && response.status) || undefined;
+  try {
+    const payload = await response.json();
+    return validateErrorEnvelope(payload, statusCode);
+  } catch (error) {
+    if (error && error.code === "validation_error") {
+      throw error;
+    }
+    throw createError("D returned non-JSON error response", "validation_error", statusCode);
+  }
+}
+
+function mapDownstreamError(envelope = {}, statusCode) {
+  if (envelope.error === "dependency_timeout") {
+    throw createError(`D dependency timeout: ${envelope.detail}`, "dependency_timeout", statusCode);
+  }
+  if (envelope.error === "validation_error") {
+    throw createError(`D validation failed: ${envelope.detail}`, "validation_error", statusCode);
+  }
+  throw createError(`D dependency unavailable: ${envelope.detail}`, "dependency_unavailable", statusCode);
+}
+
 function createDClient(options = {}) {
   const env = options.env || process.env;
   const baseUrl = String(options.baseUrl || env.D_BASE_URL || "");
@@ -119,11 +156,8 @@ function createDClient(options = {}) {
         });
 
         if (!nextResponse.ok) {
-          throw createError(
-            `D request failed with status ${nextResponse.status}`,
-            "d_http_error",
-            nextResponse.status
-          );
+          const envelope = await parseErrorEnvelope(nextResponse);
+          mapDownstreamError(envelope, nextResponse.status);
         }
 
         return nextResponse;
@@ -133,7 +167,7 @@ function createDClient(options = {}) {
         jitterMs
       });
     } catch (error) {
-      if (error && error.code === "dependency_timeout") {
+      if (error && (error.code === "dependency_timeout" || error.code === "validation_error" || error.code === "dependency_unavailable")) {
         throw error;
       }
 

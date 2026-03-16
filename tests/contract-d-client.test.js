@@ -13,6 +13,16 @@ function createJsonResponse(status, payload) {
   };
 }
 
+function createNonJsonResponse(status) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async json() {
+      throw new Error("invalid json");
+    }
+  };
+}
+
 function flushMicrotasks() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -141,7 +151,10 @@ test("resolveEpisode maps non-2xx and 503 to dependency_unavailable", async () =
   const runCase = async (status) => {
     const client = createDClient({
       baseUrl: "https://d.example",
-      fetchImpl: async () => createJsonResponse(status, { error: "nope" }),
+      fetchImpl: async () => createJsonResponse(status, {
+        error: "dependency_unavailable",
+        detail: "upstream unavailable"
+      }),
       executeBoundedDependency: async (operation) => operation({ timeout: 50 })
     });
 
@@ -153,6 +166,68 @@ test("resolveEpisode maps non-2xx and 503 to dependency_unavailable", async () =
   await runCase(503);
   await runCase(500);
   await runCase(400);
+});
+
+test("resolveEpisode maps known D error envelope codes to stable A codes", async () => {
+  const runCase = async ({ status, envelope, expectedCode }) => {
+    const client = createDClient({
+      baseUrl: "https://d.example",
+      fetchImpl: async () => createJsonResponse(status, envelope),
+      executeBoundedDependency: async (operation) => operation({ timeout: 50 })
+    });
+
+    await assert.rejects(async () => client.resolveEpisode("tt123:1:2"), {
+      code: expectedCode
+    });
+  };
+
+  await runCase({
+    status: 504,
+    envelope: { error: "dependency_timeout", detail: "timed out" },
+    expectedCode: "dependency_timeout"
+  });
+
+  await runCase({
+    status: 400,
+    envelope: { error: "validation_error", detail: "invalid episode id" },
+    expectedCode: "validation_error"
+  });
+});
+
+test("resolveEpisode rejects malformed D error envelope missing detail", async () => {
+  const client = createDClient({
+    baseUrl: "https://d.example",
+    fetchImpl: async () => createJsonResponse(503, { error: "dependency_unavailable" }),
+    executeBoundedDependency: async (operation) => operation({ timeout: 50 })
+  });
+
+  await assert.rejects(async () => client.resolveEpisode("tt123:1:2"), {
+    code: "validation_error"
+  });
+});
+
+test("resolveEpisode rejects malformed D error envelope shape", async () => {
+  const client = createDClient({
+    baseUrl: "https://d.example",
+    fetchImpl: async () => createJsonResponse(503, "unavailable"),
+    executeBoundedDependency: async (operation) => operation({ timeout: 50 })
+  });
+
+  await assert.rejects(async () => client.resolveEpisode("tt123:1:2"), {
+    code: "validation_error"
+  });
+});
+
+test("resolveEpisode rejects non-JSON D error response", async () => {
+  const client = createDClient({
+    baseUrl: "https://d.example",
+    fetchImpl: async () => createNonJsonResponse(503),
+    executeBoundedDependency: async (operation) => operation({ timeout: 50 })
+  });
+
+  await assert.rejects(async () => client.resolveEpisode("tt123:1:2"), {
+    code: "validation_error"
+  });
 });
 
 test("resolveEpisode maps network failures to dependency_unavailable", async () => {
