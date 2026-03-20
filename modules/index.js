@@ -13,7 +13,6 @@ module.exports = Object.freeze({
     operatorAuth: "./policy/operator-auth"
   },
   integrations: {
-    redisClient: "./integrations/redis-client",
     dClient: "./integrations/d-client"
   },
   presentation: {

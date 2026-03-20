@@ -1,10 +1,6 @@
 const FIELD_SEPARATOR = "|";
 const KV_SEPARATOR = "=";
 
-const RELIABILITY_HASH_KEY = "stats:reliability:counters";
-const RELIABILITY_LAST_UPDATED_KEY = "stats:reliability:last_updated";
-const RELIABILITY_META_KEY = "stats:reliability:meta";
-
 const BOUNDED_DIMENSIONS = Object.freeze({
   source: ["d", "redis", "validation", "policy", "unknown"],
   cause: [
@@ -92,95 +88,27 @@ function decodeField(field) {
   return normalizeLabels(decoded);
 }
 
-function parseHashResponse(hashResponse) {
-  if (!hashResponse) return [];
-  const entries = [];
-
-  if (Array.isArray(hashResponse)) {
-    for (let index = 0; index < hashResponse.length; index += 2) {
-      entries.push([hashResponse[index], hashResponse[index + 1]]);
-    }
-    return entries;
-  }
-
-  if (typeof hashResponse === "object") {
-    return Object.entries(hashResponse);
-  }
-
-  return [];
+async function incrementReliabilityCounter(_redisCommand, labels = {}) {
+  return normalizeLabels(labels);
 }
 
-async function incrementReliabilityCounter(redisCommand, labels = {}, amount = 1) {
-  const normalized = normalizeLabels(labels);
-  const field = encodeField(normalized);
-  const incrementBy = String(Math.max(1, Number(amount) || 1));
-  const nowIso = new Date().toISOString();
-
-  await redisCommand(["HINCRBY", RELIABILITY_HASH_KEY, field, incrementBy]);
-  await redisCommand(["HSETNX", RELIABILITY_META_KEY, `${field}|first_seen`, nowIso]);
-  await redisCommand(["HSET", RELIABILITY_META_KEY, `${field}|last_seen`, nowIso]);
-  await redisCommand(["SET", RELIABILITY_LAST_UPDATED_KEY, nowIso, "EX", "86400"]);
-
-  return normalized;
-}
-
-async function readReliabilitySummary(redisCommand) {
-  const hashResponse = await redisCommand(["HGETALL", RELIABILITY_HASH_KEY]);
-  const metaResponse = await redisCommand(["HGETALL", RELIABILITY_META_KEY]);
-  const lastUpdated = await redisCommand(["GET", RELIABILITY_LAST_UPDATED_KEY]);
-  const entries = parseHashResponse(hashResponse);
-  const metaEntries = parseHashResponse(metaResponse);
-  const metaMap = Object.fromEntries(metaEntries.map(([key, value]) => [String(key || ""), String(value || "")]));
-
-  const metrics = [];
-  const totals = {
-    success: 0,
-    degraded: 0,
-    failure: 0,
-    overall: 0
-  };
-  const bySource = {};
-  const byCause = {};
-  const byRouteClass = {};
-
-  for (const [field, rawCount] of entries) {
-    const labels = decodeField(field);
-    const count = Number(rawCount || 0);
-
-    if (!Number.isFinite(count) || count <= 0) {
-      continue;
-    }
-
-    metrics.push({
-      labels,
-      count,
-      firstSeen: metaMap[`${field}|first_seen`] || null,
-      lastSeen: metaMap[`${field}|last_seen`] || null
-    });
-
-    totals.overall += count;
-    totals[labels.result] += count;
-    bySource[labels.source] = (bySource[labels.source] || 0) + count;
-    byCause[labels.cause] = (byCause[labels.cause] || 0) + count;
-    byRouteClass[labels.routeClass] = (byRouteClass[labels.routeClass] || 0) + count;
-  }
-
+async function readReliabilitySummary(_redisCommand) {
   return {
     dimensions: BOUNDED_DIMENSIONS,
-    totals,
-    bySource,
-    byCause,
-    byRouteClass,
-    metrics,
-    lastUpdated: typeof lastUpdated === "string" ? lastUpdated : null
+    totals: { success: 0, degraded: 0, failure: 0, overall: 0 },
+    bySource: {},
+    byCause: {},
+    byRouteClass: {},
+    metrics: [],
+    lastUpdated: null
   };
 }
 
 module.exports = {
   BOUNDED_DIMENSIONS,
-  RELIABILITY_HASH_KEY,
-  RELIABILITY_META_KEY,
   incrementReliabilityCounter,
   readReliabilitySummary,
-  normalizeLabels
+  normalizeLabels,
+  encodeField,
+  decodeField
 };

@@ -1,7 +1,5 @@
 const { getRouter } = require("stremio-addon-sdk");
 const proxyaddr = require("proxy-addr");
-const { createRedisClient } = require("../integrations/redis-client");
-const { applyRequestControls } = require("./request-controls");
 const { handleStreamRequest } = require("./stream-route");
 const { handleOperatorRoute } = require("./operator-routes");
 const { sendDegradedStream } = require("../presentation/stream-payloads");
@@ -20,10 +18,6 @@ const {
   emitEvent,
   classifyFailure
 } = require("../../observability/events");
-const {
-  incrementReliabilityCounter,
-  readReliabilitySummary
-} = require("../../observability/metrics");
 
 function toHourBucket(options = {}) {
   const nowMs = Number(options.nowMs || Date.now());
@@ -52,15 +46,6 @@ function parseBooleanEnv(name, fallback) {
   return fallback;
 }
 
-const SLOT_TTL = parsePositiveIntEnv("SLOT_TTL_SEC", 3600);
-const INACTIVITY_LIMIT = parsePositiveIntEnv("INACTIVITY_LIMIT_SEC", 20 * 60);
-const MAX_SESSIONS = parsePositiveIntEnv("MAX_SESSIONS", 2);
-const RECONNECT_GRACE_MS = parsePositiveIntEnv("RECONNECT_GRACE_MS", 15000);
-const ROTATION_IDLE_MS = parsePositiveIntEnv("ROTATION_IDLE_MS", 45000);
-const SESSION_VIEW_TTL_SEC = parsePositiveIntEnv("SESSION_VIEW_TTL_SEC", 20 * 60);
-const HOURLY_ANALYTICS_TTL_SEC = parsePositiveIntEnv("HOURLY_ANALYTICS_TTL_SEC", 36 * 3600);
-const HAS_REDIS_CONFIG = Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
-const DISABLE_UPSTASH_RECORDS = parseBooleanEnv("DISABLE_UPSTASH_RECORDS", !HAS_REDIS_CONFIG);
 const TEST_VIDEO_URL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4";
 
 const DEFAULT_TRUST_PROXY = "loopback,linklocal,uniquelocal";
@@ -84,36 +69,6 @@ const DEGRADED_STREAM_POLICY = Object.freeze({
 
 function emitTelemetry(eventName, payload = {}) {
   return emitEvent(getLogger({ component: "serverless" }), eventName, payload);
-}
-
-const redisClient = createRedisClient();
-
-async function redisCommand(command) {
-  const operation = String(command && command[0] ? command[0] : "unknown");
-
-  emitTelemetry(EVENTS.DEPENDENCY_ATTEMPT, {
-    source: "redis",
-    cause: "redis_command",
-    dependency: "redis",
-    operation
-  });
-
-  try {
-    return await redisClient.command(command);
-  } catch (error) {
-    const errorDetail = String((error && error.message) || error || "unknown error");
-    emitTelemetry(EVENTS.DEPENDENCY_FAILURE, {
-      ...classifyFailure({ error, source: "redis" }),
-      dependency: "redis",
-      operation,
-      message: `Server A could not complete Redis operation ${operation} because Redis returned an error: ${errorDetail}`
-    });
-    throw error;
-  }
-}
-
-async function redisEval(script, keys = [], args = []) {
-  return redisClient.eval(script, keys, args);
 }
 
 function parseCsv(value) {
@@ -157,17 +112,13 @@ function parseStreamEpisodeId(pathname) {
   }
 }
 
-function isBlockedStreamCause(cause) {
-  return cause === "capacity_busy";
-}
-
 function normalizeStreamSummaryMode(cause) {
   if (cause === "capacity_busy") return "capacity_busy";
   return "streaming";
 }
 
 function normalizeStreamSummaryOutcome(result, cause) {
-  if (isBlockedStreamCause(cause)) return "blocked";
+  if (cause === "capacity_busy") return "blocked";
   if (result === "degraded") return "degraded";
   return "success";
 }
@@ -379,16 +330,6 @@ async function handleStatsRoute(req, res, pathname) {
   };
 }
 
-function classifyReliabilityCause(errorOrReason) {
-  const classification = typeof errorOrReason === "string"
-    ? classifyFailure({ reason: errorOrReason })
-    : classifyFailure({ error: errorOrReason });
-
-  if (classification.cause === "capacity_busy") return "capacity_busy";
-  if (classification.cause === "dependency_timeout") return "dependency_timeout";
-  return "dependency_unavailable";
-}
-
 function normalizeReliabilityResult(statusCode, fallbackResult = "success") {
   const numericStatus = Number(statusCode || 0);
   if (numericStatus >= 500) return "failure";
@@ -396,52 +337,8 @@ function normalizeReliabilityResult(statusCode, fallbackResult = "success") {
   return fallbackResult;
 }
 
-function normalizeReliabilitySource(source, cause) {
-  return classifyFailure({ source, cause }).source;
-}
-
-async function recordReliabilityOutcome(routeClass, payload = {}) {
-  if (DISABLE_UPSTASH_RECORDS) {
-    return;
-  }
-
-  const labels = {
-    source: normalizeReliabilitySource(payload.source || "policy", payload.cause),
-    cause: payload.cause || "success",
-    routeClass,
-    result: payload.result || "success"
-  };
-
-  try {
-    await incrementReliabilityCounter(redisCommand, labels);
-  } catch {
-    // Reliability counters are best-effort and must not affect responses.
-  }
-}
-
-const requestControlDependencies = Object.freeze({
-  isStremioRoute: isGatedStreamRoute,
-  getTrustedClientIp,
-  redisCommand,
-  redisEval,
-  emitTelemetry,
-  classifyFailure,
-  events: EVENTS,
-  slotTtlSec: SLOT_TTL,
-  inactivityLimitSec: INACTIVITY_LIMIT,
-  maxSessions: MAX_SESSIONS,
-  reconnectGraceMs: RECONNECT_GRACE_MS,
-  rotationIdleMs: ROTATION_IDLE_MS,
-  hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
-});
-
-function getAddonInterface() {
-  return require("../../addon");
-}
-
 function buildStreamRouteDependencies() {
   return {
-    redisCommand,
     resolveEpisode: (...args) => getAddonInterface().resolveEpisode(...args),
     sendJson,
     sendDegradedStream,
@@ -449,12 +346,12 @@ function buildStreamRouteDependencies() {
     classifyFailure,
     events: EVENTS,
     degradedPolicy: DEGRADED_STREAM_POLICY,
-    fallbackVideoUrl: TEST_VIDEO_URL,
-    disableUpstashRecords: DISABLE_UPSTASH_RECORDS,
-    sessionViewTtlSec: SESSION_VIEW_TTL_SEC,
-    inactivityLimitSec: INACTIVITY_LIMIT,
-    hourlyAnalyticsTtlSec: HOURLY_ANALYTICS_TTL_SEC
+    fallbackVideoUrl: TEST_VIDEO_URL
   };
+}
+
+function getAddonInterface() {
+  return require("../../addon");
 }
 
 async function createHttpHandler(req, res) {
@@ -515,11 +412,7 @@ async function createHttpHandler(req, res) {
         { req, res, pathname },
         {
           sendJson,
-          redisCommand,
-          readReliabilitySummary,
           applyCors,
-          maxSessions: MAX_SESSIONS,
-          sessionViewTtlSec: SESSION_VIEW_TTL_SEC,
           expectedToken: process.env.OPERATOR_TOKEN || "",
           emitTelemetry,
           classifyFailure,
@@ -544,24 +437,7 @@ async function createHttpHandler(req, res) {
       }
 
       try {
-        const controlResult = DISABLE_UPSTASH_RECORDS
-          ? { allowed: true, ip: getTrustedClientIp(req) }
-          : await applyRequestControls(
-            { req, pathname },
-            requestControlDependencies
-          );
-
-          if (!controlResult.allowed) {
-            const deniedCause = classifyReliabilityCause(controlResult.reason || "blocked:slot_taken");
-            if (pathname.startsWith("/stream/")) {
-              setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "degraded" });
-              sendStubAwareDegradedStream(controlResult.reason);
-              return;
-            }
-            setReliabilityOutcome({ source: "policy", cause: deniedCause, result: "failure" });
-            sendPublicError(req, res, 503);
-            return;
-        }
+        const controlResult = { allowed: true, ip: getTrustedClientIp(req) };
 
         if (pathname.startsWith("/stream/")) {
           const streamResult = await handleStreamRequest(
@@ -571,43 +447,7 @@ async function createHttpHandler(req, res) {
               pathname,
               ip: controlResult.ip || getTrustedClientIp(req)
             },
-            {
-              ...streamRouteDependencies,
-              onStreamError: async ({ error, ip, episodeId }) => {
-                if (DISABLE_UPSTASH_RECORDS) {
-                  return;
-                }
-                try {
-                  await redisCommand(["INCR", "stats:d_error"]);
-                } catch {
-                  // Best-effort metric path.
-                }
-
-                const event = {
-                  ip,
-                  error: error.message,
-                  episodeId,
-                  time: new Date().toISOString()
-                };
-
-                try {
-                  await redisCommand(["LPUSH", "quarantine:events", JSON.stringify(event)]);
-                  await redisCommand(["LTRIM", "quarantine:events", "0", "49"]);
-                } catch {
-                  // Best-effort quarantine path.
-                }
-              },
-              onUaForwardError: async () => {
-                if (DISABLE_UPSTASH_RECORDS) {
-                  return;
-                }
-                try {
-                  await redisCommand(["INCR", "stats:ua_forward_error"]);
-                } catch {
-                  // Best-effort metric path.
-                }
-              }
-            }
+            streamRouteDependencies
           );
           if (streamResult && streamResult.handled) {
             setReliabilityOutcome(streamResult.outcome || {});
@@ -642,12 +482,6 @@ async function createHttpHandler(req, res) {
       if (shouldTrackStats) {
         markStatsError(res.statusCode);
       }
-
-      await recordReliabilityOutcome(routeType, {
-        source: reliabilityOutcome && reliabilityOutcome.source,
-        cause: reliabilityOutcome && reliabilityOutcome.cause,
-        result: (reliabilityOutcome && reliabilityOutcome.result) || fallbackResult
-      });
 
       emitTelemetry(EVENTS.REQUEST_COMPLETE, {
         source: "policy",
