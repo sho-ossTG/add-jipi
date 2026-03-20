@@ -79,9 +79,6 @@ function normalizeSource(sourceValue, causeValue) {
 function classifyFailure(input = {}) {
   const reasonValue = typeof input === "string" ? input : input.reason;
   const reason = String(reasonValue || "").toLowerCase();
-  if (reason === "blocked:shutdown_window") {
-    return { source: SOURCES.POLICY, cause: "policy_shutdown" };
-  }
   if (reason.startsWith("blocked:")) {
     return { source: SOURCES.POLICY, cause: "capacity_busy" };
   }

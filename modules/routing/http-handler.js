@@ -72,10 +72,6 @@ const DEGRADED_STREAM_POLICY = Object.freeze({
     mode: "fallback",
     message: "Temporary load. Try again in a few minutes."
   },
-  policy_shutdown: {
-    mode: "fallback",
-    message: "Temporary load. Try again in a few minutes."
-  },
   dependency_timeout: {
     mode: "fallback",
     message: "Stream source is temporarily delayed. Please retry shortly."
@@ -162,11 +158,10 @@ function parseStreamEpisodeId(pathname) {
 }
 
 function isBlockedStreamCause(cause) {
-  return cause === "policy_shutdown" || cause === "capacity_busy";
+  return cause === "capacity_busy";
 }
 
 function normalizeStreamSummaryMode(cause) {
-  if (cause === "policy_shutdown") return "shutdown";
   if (cause === "capacity_busy") return "capacity_busy";
   return "streaming";
 }
@@ -389,7 +384,6 @@ function classifyReliabilityCause(errorOrReason) {
     ? classifyFailure({ reason: errorOrReason })
     : classifyFailure({ error: errorOrReason });
 
-  if (classification.cause === "policy_shutdown") return "policy_shutdown";
   if (classification.cause === "capacity_busy") return "capacity_busy";
   if (classification.cause === "dependency_timeout") return "dependency_timeout";
   return "dependency_unavailable";

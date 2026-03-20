@@ -121,10 +121,6 @@ test("policy-denied outcomes return shared fallback stream responses", async () 
 
   try {
     const capacityResponse = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", { ip: "198.51.100.31" });
-    const shutdownResponse = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", {
-      ip: "198.51.100.33",
-      jerusalemHour: "02"
-    });
 
     assert.equal(capacityResponse.statusCode, 200);
     assert.equal(capacityResponse.body.streams.length, 1);
@@ -132,13 +128,6 @@ test("policy-denied outcomes return shared fallback stream responses", async () 
     assert.match(capacityResponse.body.streams[0].title, /Temporary load\. Try again in a few minutes\./);
     assert.equal(capacityResponse.body.streams[0].behaviorHints.notWebReady, false);
     assert.equal(Object.prototype.hasOwnProperty.call(capacityResponse.body, "notice"), false);
-
-    assert.equal(shutdownResponse.statusCode, 200);
-    assert.equal(shutdownResponse.body.streams.length, 1);
-    assert.match(shutdownResponse.body.streams[0].url, /^https:\/\//);
-    assert.match(shutdownResponse.body.streams[0].title, /Temporary load\. Try again in a few minutes\./);
-    assert.equal(shutdownResponse.body.streams[0].behaviorHints.notWebReady, false);
-    assert.equal(Object.prototype.hasOwnProperty.call(shutdownResponse.body, "notice"), false);
   } finally {
     global.fetch = originalFetch;
     delete require.cache[require.resolve("../serverless")];

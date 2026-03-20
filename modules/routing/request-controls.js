@@ -58,10 +58,6 @@ async function applyRequestControls(input = {}, injected = {}) {
     typeof timeWindow.getBeirutInfo === "function"
       ? timeWindow.getBeirutInfo
       : () => ({ hour: 0, dateStr: "" });
-  const isWithinShutdownWindow =
-    typeof timeWindow.isWithinShutdownWindow === "function"
-      ? timeWindow.isWithinShutdownWindow
-      : () => false;
 
   const info = getBeirutInfo(injected.clock || timeWindow.createBeirutClock && timeWindow.createBeirutClock());
   const redisCommand = resolveRedisCommand(injected);
@@ -88,43 +84,8 @@ async function applyRequestControls(input = {}, injected = {}) {
     }
   }
 
-  async function runNightlyMaintenance() {
-    if (typeof injected.runNightlyRollup !== "function") {
-      return;
-    }
-
-    const day = previousDay(info && info.dateStr);
-    if (!day) {
-      return;
-    }
-
-    try {
-      await injected.runNightlyRollup(redisCommand, { day });
-    } catch {
-      // Nightly maintenance is best-effort and must not block request flow.
-    }
-  }
-
   const getTrustedClientIp = injected.getTrustedClientIp;
   const ip = typeof getTrustedClientIp === "function" ? getTrustedClientIp(req) : "unknown";
-
-  if (isWithinShutdownWindow(info, injected.shutdownWindow || {})) {
-    await runNightlyMaintenance();
-    await trackPolicyEvent([
-      "requests.total",
-      "policy.blocked",
-      "policy.blocked:shutdown_window"
-    ], ip);
-    if (typeof injected.emitTelemetry === "function") {
-      const classifyFailure = injected.classifyFailure || ((value) => ({ source: "policy", cause: value.reason || "blocked:shutdown_window" }));
-      injected.emitTelemetry(injected.events && injected.events.POLICY_DECISION, {
-        ...classifyFailure({ reason: "blocked:shutdown_window" }),
-        route: pathname,
-        allowed: false
-      });
-    }
-    return { allowed: false, reason: "blocked:shutdown_window" };
-  }
 
   if (info.hour >= 1 && info.dateStr) {
     const resetKey = `system:reset:${info.dateStr}`;

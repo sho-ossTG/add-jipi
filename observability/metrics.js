@@ -10,7 +10,6 @@ const BOUNDED_DIMENSIONS = Object.freeze({
   cause: [
     "success",
     "admitted",
-    "policy_shutdown",
     "capacity_busy",
     "dependency_timeout",
     "dependency_unavailable",
@@ -38,7 +37,6 @@ function normalizeBoundedValue(dimension, value) {
   if (dimension === "cause") {
     if (normalized.includes("timeout")) return "dependency_timeout";
     if (normalized.includes("capacity") || normalized.includes("slot") || normalized.includes("blocked")) return "capacity_busy";
-    if (normalized.includes("shutdown")) return "policy_shutdown";
     if (normalized.includes("valid")) return "validation_invalid_stream_url";
     if (normalized.includes("token_required")) return "operator_token_required";
     if (normalized.includes("forbidden")) return "operator_forbidden";

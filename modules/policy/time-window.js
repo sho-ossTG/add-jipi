@@ -1,6 +1,4 @@
 const DEFAULT_TIME_ZONE = "Asia/Beirut";
-const DEFAULT_SHUTDOWN_START_HOUR = 0;
-const DEFAULT_SHUTDOWN_END_HOUR = 8;
 
 function createBeirutClock(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => new Date();
@@ -40,26 +38,7 @@ function getBeirutInfo(clock = createBeirutClock()) {
   };
 }
 
-function isWithinShutdownWindow(info, options = {}) {
-  const startHour = Number.parseInt(String(options.startHour ?? DEFAULT_SHUTDOWN_START_HOUR), 10);
-  const endHour = Number.parseInt(String(options.endHour ?? DEFAULT_SHUTDOWN_END_HOUR), 10);
-  if (!info || !Number.isFinite(info.hour)) {
-    return false;
-  }
-
-  if (startHour === endHour) {
-    return true;
-  }
-
-  if (startHour < endHour) {
-    return info.hour >= startHour && info.hour < endHour;
-  }
-
-  return info.hour >= startHour || info.hour < endHour;
-}
-
 module.exports = {
   createBeirutClock,
-  getBeirutInfo,
-  isWithinShutdownWindow
+  getBeirutInfo
 };
