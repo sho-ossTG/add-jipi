@@ -1,11 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  createRedisRuntime,
   loadAddon,
   loadServerless,
-  requestWithHandler,
-  setRedisEnv
+  requestWithHandler
 } = require("./helpers/runtime-fixtures");
 
 async function request(handler, pathname, options = {}) {
@@ -17,13 +15,8 @@ async function request(handler, pathname, options = {}) {
 }
 
 test("dependency timeout maps to deterministic delayed fallback stream", async () => {
-  const runtime = createRedisRuntime();
-  setRedisEnv();
-
-  const originalFetch = global.fetch;
   const addon = loadAddon();
   const originalResolveEpisode = addon.resolveEpisode;
-  global.fetch = runtime.fetch;
   const handler = loadServerless();
 
   try {
@@ -40,20 +33,14 @@ test("dependency timeout maps to deterministic delayed fallback stream", async (
     assert.match(response.body.streams[0].title, /temporarily delayed/i);
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
-    global.fetch = originalFetch;
     delete require.cache[require.resolve("../serverless")];
     delete require.cache[require.resolve("../addon")];
   }
 });
 
 test("dependency unavailable maps to deterministic unavailable fallback stream", async () => {
-  const runtime = createRedisRuntime();
-  setRedisEnv();
-
-  const originalFetch = global.fetch;
   const addon = loadAddon();
   const originalResolveEpisode = addon.resolveEpisode;
-  global.fetch = runtime.fetch;
   const handler = loadServerless();
 
   try {
@@ -69,23 +56,16 @@ test("dependency unavailable maps to deterministic unavailable fallback stream",
     assert.equal(response.body.streams.length, 1);
     assert.match(response.body.streams[0].url, /^https:\/\//);
     assert.match(response.body.streams[0].title, /temporarily unavailable/i);
-    assert.equal(runtime.state.strings.get("stats:d_error"), "1");
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
-    global.fetch = originalFetch;
     delete require.cache[require.resolve("../serverless")];
     delete require.cache[require.resolve("../addon")];
   }
 });
 
 test("validation error maps to deterministic unavailable fallback stream", async () => {
-  const runtime = createRedisRuntime();
-  setRedisEnv();
-
-  const originalFetch = global.fetch;
   const addon = loadAddon();
   const originalResolveEpisode = addon.resolveEpisode;
-  global.fetch = runtime.fetch;
   const handler = loadServerless();
 
   try {
@@ -102,34 +82,29 @@ test("validation error maps to deterministic unavailable fallback stream", async
     assert.match(response.body.streams[0].title, /temporarily unavailable/i);
   } finally {
     addon.resolveEpisode = originalResolveEpisode;
-    global.fetch = originalFetch;
     delete require.cache[require.resolve("../serverless")];
     delete require.cache[require.resolve("../addon")];
   }
 });
 
-test("policy-denied outcomes return shared fallback stream responses", async () => {
-  const runtime = createRedisRuntime();
-  const now = Date.now();
-  runtime.state.sessions.set("198.51.100.1", now - 1000);
-  runtime.state.sessions.set("198.51.100.2", now - 2000);
-  setRedisEnv();
-
-  const originalFetch = global.fetch;
-  global.fetch = runtime.fetch;
+test("invalid D URL (non-HTTPS) returns degraded fallback stream", async () => {
+  const addon = loadAddon();
+  const originalResolveEpisode = addon.resolveEpisode;
   const handler = loadServerless();
 
   try {
-    const capacityResponse = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", { ip: "198.51.100.31" });
+    addon.resolveEpisode = async () => ({
+      url: "ftp://invalid.example.com/video.mp4",
+      title: "One Piece S1E6"
+    });
 
-    assert.equal(capacityResponse.statusCode, 200);
-    assert.equal(capacityResponse.body.streams.length, 1);
-    assert.match(capacityResponse.body.streams[0].url, /^https:\/\//);
-    assert.match(capacityResponse.body.streams[0].title, /Temporary load\. Try again in a few minutes\./);
-    assert.equal(capacityResponse.body.streams[0].behaviorHints.notWebReady, false);
-    assert.equal(Object.prototype.hasOwnProperty.call(capacityResponse.body, "notice"), false);
+    const response = await request(handler, "/stream/series/tt0388629%3A1%3A6.json", { ip: "198.51.100.31" });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body.streams.length, 1);
+    assert.match(response.body.streams[0].url, /^https:\/\//);
   } finally {
-    global.fetch = originalFetch;
+    addon.resolveEpisode = originalResolveEpisode;
     delete require.cache[require.resolve("../serverless")];
+    delete require.cache[require.resolve("../addon")];
   }
 });

@@ -1,10 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  createMockRedisFetch,
   loadServerless,
-  requestWithHandler,
-  setRedisEnv
+  requestWithHandler
 } = require("./helpers/runtime-fixtures");
 
 async function request(handler, pathname, options = {}) {
@@ -20,15 +18,11 @@ async function request(handler, pathname, options = {}) {
 
 function withServerA(run) {
   return async () => {
-    setRedisEnv();
-    const originalFetch = global.fetch;
-    global.fetch = createMockRedisFetch("allow");
     const handler = loadServerless();
 
     try {
       await run(handler);
     } finally {
-      global.fetch = originalFetch;
       delete require.cache[require.resolve("../serverless")];
     }
   };

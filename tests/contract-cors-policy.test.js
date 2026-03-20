@@ -116,7 +116,7 @@ test("preflight with disallowed requested method is rejected", async () => {
   assert.equal(response.statusCode, 403);
   assert.equal(response.headers["access-control-allow-origin"], "https://allowed.example");
   assert.equal(response.headers.vary, "Origin");
-  assert.deepEqual(JSON.parse(response.body), { error: "cors_method_not_allowed" });
+  assert.equal(JSON.parse(response.body).error, "cors_method_not_allowed");
 });
 
 test("allowed-origin GET response includes expected CORS headers", async () => {

@@ -2,10 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createHttpHandler } = require("../modules/routing/http-handler");
 const {
-  createMockRedisFetch,
   loadAddon,
-  requestWithHandler,
-  setRedisEnv
+  requestWithHandler
 } = require("./helpers/runtime-fixtures");
 
 const STREMIO_ORIGIN = "https://web.stremio.com";
@@ -16,14 +14,11 @@ function assertPermissiveStremioOrigin(value) {
 
 async function request(pathname, options = {}) {
   const { origin = STREMIO_ORIGIN } = options;
-  setRedisEnv();
   process.env.CORS_ALLOW_ORIGINS = "https://allowed.example";
 
-  const originalFetch = global.fetch;
   const addon = loadAddon();
   const originalResolveEpisode = addon.resolveEpisode;
 
-  global.fetch = createMockRedisFetch("allow");
   addon.resolveEpisode = async () => ({
     url: "https://cdn.example.com/onepiece-1-1.mp4",
     title: "One Piece S1E1"
@@ -38,7 +33,6 @@ async function request(pathname, options = {}) {
       ip: "203.0.113.1"
     });
   } finally {
-    global.fetch = originalFetch;
     addon.resolveEpisode = originalResolveEpisode;
   }
 }

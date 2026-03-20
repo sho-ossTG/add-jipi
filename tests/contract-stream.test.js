@@ -1,12 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  createMockRedisFetch,
-  createRedisRuntime,
   loadAddon,
   loadServerless,
-  requestWithHandler,
-  setRedisEnv
+  requestWithHandler
 } = require("./helpers/runtime-fixtures");
 const { resetBaseLoggerForTest, setBaseLoggerForTest } = require("../observability/logger");
 
@@ -32,11 +29,7 @@ function createCaptureLogger(events = [], bindings = {}) {
 }
 
 async function request(pathname, options = {}) {
-  const { mode = "allow", resolveEpisode } = options;
-  setRedisEnv();
-
-  const originalFetch = global.fetch;
-  global.fetch = createMockRedisFetch(mode);
+  const { resolveEpisode } = options;
 
   const addon = loadAddon();
   const originalResolveEpisode = addon.resolveEpisode;
@@ -50,7 +43,6 @@ async function request(pathname, options = {}) {
       headers: { "x-forwarded-for": "203.0.113.1" }
     });
   } finally {
-    global.fetch = originalFetch;
     addon.resolveEpisode = originalResolveEpisode;
     delete require.cache[require.resolve("../serverless")];
   }
@@ -76,14 +68,18 @@ test("GET supported stream returns contract-valid HTTPS stream payload", async (
   assert.equal(stream.behaviorHints.notWebReady, false);
 });
 
-test("GET stream route blocked by controls returns protocol-safe fallback stream", async () => {
+test("GET stream route always admits requests — no slot gate", async () => {
   const response = await request("/stream/series/tt0388629%3A1%3A1.json", {
-    mode: "slot-blocked"
+    resolveEpisode: async () => ({
+      url: "https://cdn.example.com/onepiece-1-1.mp4",
+      title: "One Piece S1E1"
+    })
   });
 
   assert.equal(response.statusCode, 200);
   assert.ok(Array.isArray(response.body.streams));
   assert.equal(response.body.streams.length, 1);
+  assert.match(response.body.streams[0].url, /^https:\/\//);
 });
 
 test("GET unsupported stream id returns empty streams payload", async () => {
@@ -93,91 +89,27 @@ test("GET unsupported stream id returns empty streams payload", async () => {
   assert.deepEqual(response.body, { streams: [] });
 });
 
-test("manifest and catalog stay available when stream slot gate is blocked", async () => {
-  const manifestResponse = await request("/manifest.json", { mode: "slot-blocked" });
+test("manifest and catalog are always available — no gate", async () => {
+  const manifestResponse = await request("/manifest.json");
   assert.equal(manifestResponse.statusCode, 200);
   assert.equal(manifestResponse.body.id, "org.jipi.onepiece");
 
-  const catalogResponse = await request("/catalog/series/onepiece_catalog.json", { mode: "slot-blocked" });
+  const catalogResponse = await request("/catalog/series/onepiece_catalog.json");
   assert.equal(catalogResponse.statusCode, 200);
   assert.ok(Array.isArray(catalogResponse.body.metas));
   assert.ok(catalogResponse.body.metas.length > 0);
 
-  const streamResponse = await request("/stream/series/tt0388629%3A1%3A1.json", { mode: "slot-blocked" });
+  const streamResponse = await request("/stream/series/tt0388629%3A1%3A1.json", {
+    resolveEpisode: async () => ({
+      url: "https://cdn.example.com/onepiece-1-1.mp4",
+      title: "One Piece S1E1"
+    })
+  });
   assert.equal(streamResponse.statusCode, 200);
   assert.equal(streamResponse.body.streams.length, 1);
 });
 
-test("reconnecting active session within grace is admitted without consuming another slot", async () => {
-  setRedisEnv();
-  const redisRuntime = createRedisRuntime();
-  const originalFetch = global.fetch;
-  const gateDecisions = [];
-  global.fetch = async (url, options = {}) => {
-    const payload = JSON.parse(options.body || "[]");
-    const command = Array.isArray(payload) ? payload[0] : [];
-    const operation = String(command[0] || "").toUpperCase();
-    const response = await redisRuntime.fetch(url, options);
-
-    if (operation !== "EVAL") {
-      return response;
-    }
-
-    const body = await response.json();
-    const gateResult = body && body[0] && body[0].result;
-    if (Array.isArray(gateResult)) {
-      gateDecisions.push(String(gateResult[1] || ""));
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      async json() {
-        return body;
-      }
-    };
-  };
-
-  const addon = loadAddon();
-  const originalResolveEpisode = addon.resolveEpisode;
-  addon.resolveEpisode = async () => ({
-    url: "https://cdn.example.com/onepiece-1-9.mp4",
-    title: "One Piece S1E9"
-  });
-
-  const handler = loadServerless();
-
-  try {
-    const first = await requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A9.json", {
-      ip: "203.0.113.9",
-      headers: {
-        "x-forwarded-for": "203.0.113.9",
-        "user-agent": "ACCS2-First/1.0"
-      }
-    });
-    assert.equal(first.statusCode, 200);
-
-    const second = await requestWithHandler(handler, "/stream/series/tt0388629%3A1%3A9.json", {
-      ip: "203.0.113.9",
-      headers: {
-        "x-forwarded-for": "203.0.113.9",
-        "user-agent": "ACCS2-Reconnect/1.0"
-      }
-    });
-    assert.equal(second.statusCode, 200);
-
-    assert.deepEqual(gateDecisions.slice(0, 2), ["admitted:new", "admitted:existing"]);
-  } finally {
-    global.fetch = originalFetch;
-    addon.resolveEpisode = originalResolveEpisode;
-    delete require.cache[require.resolve("../serverless")];
-  }
-});
-
 test("stream response completes before pending UA forwarding resolves", async () => {
-  setRedisEnv();
-  const redisRuntime = createRedisRuntime();
-  const originalFetch = global.fetch;
   const originalDBaseUrl = process.env.D_BASE_URL;
   let releaseUaForward;
   const pendingUaForward = new Promise((resolve) => {
@@ -185,12 +117,14 @@ test("stream response completes before pending UA forwarding resolves", async ()
   });
   let uaCallCount = 0;
 
-  global.fetch = async (url, options = {}) => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
     if (String(url) === "https://d.example/api/ua") {
       uaCallCount += 1;
       return pendingUaForward;
     }
-    return redisRuntime.fetch(url, options);
+    if (originalFetch) return originalFetch(url);
+    throw new Error("unexpected fetch: " + url);
   };
   process.env.D_BASE_URL = "https://d.example";
 
@@ -225,7 +159,6 @@ test("stream response completes before pending UA forwarding resolves", async ()
 
     await flushMicrotasks();
     assert.equal(uaCallCount, 1);
-    assert.equal(redisRuntime.state.strings.get("stats:ua_forward_error"), undefined);
   } finally {
     if (typeof releaseUaForward === "function") {
       releaseUaForward({
@@ -246,21 +179,20 @@ test("stream response completes before pending UA forwarding resolves", async ()
   }
 });
 
-test("UA forwarding failure logs warn, increments ua_forward_error, and keeps stream payload stable", async () => {
-  setRedisEnv();
-  const redisRuntime = createRedisRuntime();
-  const originalFetch = global.fetch;
+test("UA forwarding failure logs warn and keeps stream payload stable", async () => {
   const originalDBaseUrl = process.env.D_BASE_URL;
   const warningEvents = [];
   setBaseLoggerForTest(createCaptureLogger(warningEvents));
 
-  global.fetch = async (url, options = {}) => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
     if (String(url) === "https://d.example/api/ua") {
       const error = new Error("ua forward transport failed");
       error.code = "dependency_unavailable";
       throw error;
     }
-    return redisRuntime.fetch(url, options);
+    if (originalFetch) return originalFetch(url);
+    throw new Error("unexpected fetch: " + url);
   };
   process.env.D_BASE_URL = "https://d.example";
 
@@ -303,8 +235,6 @@ test("UA forwarding failure logs warn, increments ua_forward_error, and keeps st
     assert.equal(warning.episodeId, "tt0388629:1:3");
     assert.equal(warning.userAgent, "FR4-Failure/1.0");
     assert.equal(warning.errorCode, "dependency_unavailable");
-
-    assert.equal(redisRuntime.state.strings.get("stats:ua_forward_error"), "1");
   } finally {
     resetBaseLoggerForTest();
     global.fetch = originalFetch;

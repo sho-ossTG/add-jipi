@@ -33,11 +33,13 @@ test("canonical source taxonomy is D-first and excludes broker labels", () => {
   assert.equal(normalizeSource("legacy-source", "dependency_unavailable"), "d");
 });
 
-test("operator diagnostics use stats:d_error and resolutionErrors naming", () => {
+test("operator diagnostics no longer reference broker or redis stat keys", () => {
   const operatorRoutesSource = readRepoFile("modules/routing/operator-routes.js");
 
-  assert.match(operatorRoutesSource, /stats:d_error/);
-  assert.match(operatorRoutesSource, /resolutionErrors/);
+  // Redis removed — no Redis stat key references remain
   assert.doesNotMatch(operatorRoutesSource, new RegExp("stats:" + "broker_error"));
   assert.doesNotMatch(operatorRoutesSource, new RegExp("\\b" + "broker" + "Errors\\b"));
+  assert.doesNotMatch(operatorRoutesSource, /stats:d_error/);
+  assert.doesNotMatch(operatorRoutesSource, /LRANGE/);
+  assert.doesNotMatch(operatorRoutesSource, /LREM/);
 });
