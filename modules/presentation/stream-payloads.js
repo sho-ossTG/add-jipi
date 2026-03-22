@@ -1,9 +1,9 @@
-function formatStream(title, url, options = {}) {
+function formatStream(description, url, options = {}) {
   const hints = { notWebReady: false, bingeGroup: "jipi" };
   if (options.filename) hints.filename = options.filename;
   return {
     name: "Jipi",
-    title,
+    description,
     url,
     behaviorHints: hints
   };
