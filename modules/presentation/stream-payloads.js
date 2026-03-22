@@ -1,11 +1,11 @@
-function formatStream(title, url) {
+function formatStream(title, url, options = {}) {
+  const hints = { notWebReady: false, bingeGroup: "jipi" };
+  if (options.filename) hints.filename = options.filename;
   return {
     name: "Jipi",
     title,
     url,
-    behaviorHints: {
-      notWebReady: false
-    }
+    behaviorHints: hints
   };
 }
 
