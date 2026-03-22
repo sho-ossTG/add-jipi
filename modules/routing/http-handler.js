@@ -188,7 +188,7 @@ function sendJson(req, res, statusCode, payload) {
   applyCors(req, res);
   bindResponseCorrelationId(res);
   res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(payload));
 }
 
@@ -199,6 +199,7 @@ function handlePreflight(req, res) {
   const cors = applyCors(req, res, pathname);
   if (!cors.originAllowed) {
     res.statusCode = 204;
+    res.setHeader("Content-Length", "0");
     res.end();
     return true;
   }
@@ -224,7 +225,9 @@ function handlePreflight(req, res) {
 
   res.setHeader("Access-Control-Allow-Methods", cors.policy.methods.join(","));
   res.setHeader("Access-Control-Allow-Headers", cors.policy.headers.join(","));
+  res.setHeader("Access-Control-Max-Age", "7200");
   res.statusCode = 204;
+  res.setHeader("Content-Length", "0");
   res.end();
   return true;
 }
@@ -468,6 +471,9 @@ async function createHttpHandler(req, res) {
 
       applyCors(req, res);
       bindResponseCorrelationId(res);
+      if (pathname === "/manifest.json") {
+        res.setHeader("Cache-Control", "public, max-age=300, must-revalidate");
+      }
       runtimeRouter(req, res, () => {
         res.statusCode = 404;
         res.end();
