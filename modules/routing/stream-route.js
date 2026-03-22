@@ -66,9 +66,18 @@ async function handleStreamRequest(input = {}, injected = {}) {
 
     const resolveEpisode = resolveEpisodeResolver(streamInjected);
     const resolved = await resolveEpisode(episodeId);
-    const finalUrl = typeof resolved.url === "string"
+    const rawUrl = typeof resolved.url === "string"
       ? resolved.url.replace(/^http:\/\//, "https://")
       : "";
+    const finalUrl = (() => {
+      try {
+        const u = new URL(rawUrl);
+        u.searchParams.delete("range");
+        return u.toString();
+      } catch {
+        return rawUrl;
+      }
+    })();
 
     if (!finalUrl.startsWith("https://")) {
       sendDegradedStream(req, res, "validation_invalid_stream_url", injected);
@@ -84,7 +93,7 @@ async function handleStreamRequest(input = {}, injected = {}) {
 
     const formatStreamLocal = injected.formatStream || streamPayloads.formatStream;
     injected.sendJson(req, res, 200, {
-      streams: [formatStreamLocal(resolved.title, finalUrl)]
+      streams: [formatStreamLocal(resolved.title, finalUrl, { filename: resolved.title })]
     });
 
     const forwardUserAgent = resolveForwardUserAgent(streamInjected);
