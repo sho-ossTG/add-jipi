@@ -53,13 +53,29 @@ builder.defineStreamHandler(async (args) => {
   try {
     const resolved = await resolveEpisode(streamId);
 
+    const rawUrl = typeof resolved.url === "string"
+      ? resolved.url.replace(/^http:\/\//, "https://")
+      : "";
+    const finalUrl = (() => {
+      try {
+        const u = new URL(rawUrl);
+        u.searchParams.delete("range");
+        return u.toString();
+      } catch {
+        return rawUrl;
+      }
+    })();
     return {
       streams: [
         {
           name: "Jipi",
           title: resolved.title,
-          url: resolved.url,
-          behaviorHints: { notWebReady: false }
+          url: finalUrl,
+          behaviorHints: {
+            notWebReady: false,
+            bingeGroup: "jipi",
+            filename: resolved.title
+          }
         }
       ]
     };
