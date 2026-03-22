@@ -2,7 +2,6 @@
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 65000;
 // A keeps a 200s total budget so transient failures can use three 65s attempts.
 const DEFAULT_TOTAL_TIMEOUT_MS = 200000;
-const DEFAULT_RETRY_JITTER_MS = 150;
 const { executeBoundedDependency } = require("./bounded-dependency");
 const { getCorrelationId } = require("../../observability/context");
 
@@ -125,7 +124,8 @@ function createDClient(options = {}) {
   const boundedDependency = options.executeBoundedDependency || executeBoundedDependency;
   const attemptTimeoutMs = parsePositiveInteger(options.attemptTimeoutMs || env.D_ATTEMPT_TIMEOUT_MS, DEFAULT_ATTEMPT_TIMEOUT_MS);
   const totalBudgetMs = parsePositiveInteger(options.totalBudgetMs || env.D_TOTAL_TIMEOUT_MS, DEFAULT_TOTAL_TIMEOUT_MS);
-  const jitterMs = parsePositiveInteger(options.jitterMs || env.D_RETRY_JITTER_MS, DEFAULT_RETRY_JITTER_MS);
+  const backoffBaseMs = parsePositiveInteger(options.backoffBaseMs || env.D_BACKOFF_BASE_MS, 500);
+  const backoffCapMs  = parsePositiveInteger(options.backoffCapMs  || env.D_BACKOFF_CAP_MS,  2000);
 
   async function resolveEpisode(episodeId, options = {}) {
     const id = String(episodeId || "").trim();
@@ -166,8 +166,10 @@ function createDClient(options = {}) {
       }, {
         attemptTimeoutMs,
         totalBudgetMs,
-        jitterMs,
-        maxAttempts: 3
+        backoffBaseMs,
+        backoffCapMs,
+        maxAttempts: 3,
+        safeToRetry: true // POST /api/resolve is a read-only lookup — safe to retry per RFC 9110 semantics
       });
     } catch (error) {
       if (error && (error.code === "dependency_timeout" || error.code === "validation_error" || error.code === "dependency_unavailable")) {

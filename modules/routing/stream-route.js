@@ -1,8 +1,21 @@
 const { createDClient } = require("../integrations/d-client");
 const defaultStreamPayloads = require("../presentation/stream-payloads");
 const { getLogger } = require("../../observability/logger");
+const { createConcurrencyGuard } = require("../integrations/concurrency-guard");
+const { defaultCache } = require("../integrations/cache");
+const { EVENTS, emitEvent, classifyFailure: classifyFailureUtil } = require("../../observability/events");
+const { incrementReliabilityCounter } = require("../../observability/metrics");
 
 const logger = getLogger({ component: "stream-route" });
+
+// Module-level default — per-Vercel-invocation scope (state resets each cold start).
+// Override via injected.concurrencyGuard in tests or future A/B configuration.
+const defaultGuard = createConcurrencyGuard({
+  providerConcurrencyLimit: Number(process.env.PROVIDER_CONCURRENCY_LIMIT) || 3,
+  globalConcurrencyLimit: Number(process.env.GLOBAL_CONCURRENCY_LIMIT) || 10
+});
+
+const STREAM_CACHE_CONTROL = "public, s-maxage=3600, stale-while-revalidate=14400, stale-if-error=604800";
 
 function resolveEpisodeResolver(injected = {}) {
   if (typeof injected.resolveEpisode === "function") {
@@ -28,6 +41,17 @@ function resolveForwardUserAgent(injected = {}) {
     executeBoundedDependency: injected.executeBoundedDependency
   });
   return dClient.forwardUserAgent.bind(dClient);
+}
+
+function normalizeStreamUrl(rawUrl) {
+  const base = typeof rawUrl === "string" ? rawUrl.replace(/^http:\/\//, "https://") : "";
+  try {
+    const u = new URL(base);
+    u.searchParams.delete("range");
+    return u.toString();
+  } catch {
+    return base;
+  }
 }
 
 async function handleStreamRequest(input = {}, injected = {}) {
@@ -59,27 +83,68 @@ async function handleStreamRequest(input = {}, injected = {}) {
     correlationId: req && req.headers && (req.headers["x-correlation-id"] || req.headers["X-Correlation-Id"]) || ""
   };
 
+  const guard = injected.concurrencyGuard || defaultGuard;
+  const streamCache = injected.streamCache || defaultCache;
+  const cached = streamCache.get(episodeId);
+
+  if (cached.hit && cached.negative) {
+    sendDegradedStream(req, res, "dependency_unavailable", injected);
+    return { handled: true, outcome: { source: "cache", cause: "cache_negative", result: "degraded" } };
+  }
+
+  if (cached.hit) {
+    const formatStreamLocal = injected.formatStream || streamPayloads.formatStream;
+    if (res && typeof res.setHeader === "function") {
+      res.setHeader("Cache-Control", STREAM_CACHE_CONTROL);
+    }
+    injected.sendJson(req, res, 200, {
+      streams: [formatStreamLocal(cached.value.title, cached.value.finalUrl, { filename: cached.value.title })]
+    });
+
+    if (cached.stale) {
+      const resolveForSwr = resolveEpisodeResolver(streamInjected);
+      Promise.resolve()
+        .then(() => resolveForSwr(episodeId))
+        .then((refreshed) => {
+          const refreshFinalUrl = normalizeStreamUrl(refreshed.url);
+          if (refreshFinalUrl.startsWith("https://")) {
+            streamCache.set(episodeId, { title: refreshed.title, finalUrl: refreshFinalUrl });
+          }
+        })
+        .catch(() => { /* keep stale, no eviction */ });
+    }
+
+    const forwardUserAgent = resolveForwardUserAgent(streamInjected);
+    Promise.resolve()
+      .then(() => forwardUserAgent(requestUserAgent, episodeId, {
+        onFailure: (error) => {
+          logger.warn({
+            episodeId,
+            userAgent: requestUserAgent,
+            errorCode: String(error && error.code || "ua_forward_error"),
+            errorMessage: String(error && error.message || "Unknown UA forward error")
+          }, "ua_forward_failed");
+        }
+      }))
+      .catch(() => {});
+
+    return { handled: true, outcome: { source: "cache", cause: cached.stale ? "cache_stale" : "cache_hit", result: "success" } };
+  }
+
   try {
     if (typeof injected.sendJson !== "function") {
       throw new Error("handleStreamRequest requires injected.sendJson");
     }
 
     const resolveEpisode = resolveEpisodeResolver(streamInjected);
-    const resolved = await resolveEpisode(episodeId);
-    const rawUrl = typeof resolved.url === "string"
-      ? resolved.url.replace(/^http:\/\//, "https://")
-      : "";
-    const finalUrl = (() => {
-      try {
-        const u = new URL(rawUrl);
-        u.searchParams.delete("range");
-        return u.toString();
-      } catch {
-        return rawUrl;
-      }
-    })();
+    const resolved = await guard.execute(episodeId, () => resolveEpisode(episodeId));
+    const finalUrl = normalizeStreamUrl(resolved.url);
 
     if (!finalUrl.startsWith("https://")) {
+      const validationLabels = { source: 'validation', cause: 'validation_invalid_stream_url', routeClass: 'stremio', result: 'degraded' };
+      emitEvent(logger, EVENTS.DEPENDENCY_FAILURE, { ...validationLabels, episodeId, detail: 'Resolved URL was empty or non-HTTPS' });
+      await incrementReliabilityCounter(null, validationLabels);
+      streamCache.setNegative(episodeId);
       sendDegradedStream(req, res, "validation_invalid_stream_url", injected);
       return {
         handled: true,
@@ -89,6 +154,11 @@ async function handleStreamRequest(input = {}, injected = {}) {
           result: "degraded"
         }
       };
+    }
+
+    streamCache.set(episodeId, { title: resolved.title, finalUrl });
+    if (res && typeof res.setHeader === "function") {
+      res.setHeader("Cache-Control", STREAM_CACHE_CONTROL);
     }
 
     const formatStreamLocal = injected.formatStream || streamPayloads.formatStream;
@@ -119,9 +189,13 @@ async function handleStreamRequest(input = {}, injected = {}) {
       }
     };
   } catch (error) {
+    const classifyFailureFn = injected.classifyFailure || classifyFailureUtil;
+    const degraded = classifyFailureFn({ error, source: "d" });
+    const catchLabels = { source: degraded.source, cause: degraded.cause, routeClass: 'stremio', result: 'degraded' };
+    emitEvent(logger, EVENTS.DEPENDENCY_FAILURE, { ...catchLabels, episodeId });
+    await incrementReliabilityCounter(null, catchLabels);
+    streamCache.setNegative(episodeId);
     sendDegradedStream(req, res, error, injected);
-    const classifyFailure = injected.classifyFailure || ((value) => ({ source: "d", cause: value.error ? "dependency_unavailable" : "dependency_unavailable" }));
-    const degraded = classifyFailure({ error, source: "d" });
     return {
       handled: true,
       outcome: {

@@ -1,14 +1,19 @@
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 60000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 60000;
-const DEFAULT_RETRY_JITTER_MS = 150;
 const DEFAULT_MAX_ATTEMPTS = 2;
+const DEFAULT_BACKOFF_BASE_MS = 500;
+const DEFAULT_BACKOFF_CAP_MS = 2000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function randomJitter(maxMs) {
-  return Math.floor(Math.random() * Math.max(1, maxMs));
+// Source: https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+// Full jitter: delay = random_between(0, min(cap, base * 2^(attempt+1)))
+// attempt is 0-indexed: 0 = gap before second attempt, 1 = gap before third attempt.
+function fullJitterDelay(attempt, baseMs, capMs) {
+  const ceiling = Math.min(capMs, baseMs * Math.pow(2, attempt + 1));
+  return Math.floor(Math.random() * Math.max(1, ceiling));
 }
 
 function isTransientDependencyFailure(error) {
@@ -23,7 +28,9 @@ async function executeBoundedDependency(operation, options = {}) {
   const {
     attemptTimeoutMs = DEFAULT_ATTEMPT_TIMEOUT_MS,
     totalBudgetMs = DEFAULT_TOTAL_TIMEOUT_MS,
-    jitterMs = DEFAULT_RETRY_JITTER_MS,
+    backoffBaseMs = DEFAULT_BACKOFF_BASE_MS,
+    backoffCapMs = DEFAULT_BACKOFF_CAP_MS,
+    safeToRetry = false,
     maxAttempts = DEFAULT_MAX_ATTEMPTS
   } = options;
   const parsedMaxAttempts = Number.parseInt(String(maxAttempts), 10);
@@ -50,14 +57,14 @@ async function executeBoundedDependency(operation, options = {}) {
       return await operation({ timeout });
     } catch (error) {
       lastError = error;
-      const canRetry = attempt + 1 < attemptLimit && isTransientDependencyFailure(error);
+      const canRetry = safeToRetry && attempt + 1 < attemptLimit && isTransientDependencyFailure(error);
       if (!canRetry) break;
 
       const postAttemptElapsed = Date.now() - startedAt;
       const postAttemptRemaining = totalBudgetMs - postAttemptElapsed;
       if (postAttemptRemaining <= 1) break;
 
-      const jitterDelay = Math.min(randomJitter(jitterMs), postAttemptRemaining - 1);
+      const jitterDelay = Math.min(fullJitterDelay(attempt, backoffBaseMs, backoffCapMs), postAttemptRemaining - 1);
       if (jitterDelay > 0) {
         await sleep(jitterDelay);
       }
@@ -71,5 +78,6 @@ async function executeBoundedDependency(operation, options = {}) {
 
 module.exports = {
   executeBoundedDependency,
-  isTransientDependencyFailure
+  isTransientDependencyFailure,
+  fullJitterDelay
 };

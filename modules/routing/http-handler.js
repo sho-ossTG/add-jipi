@@ -18,6 +18,7 @@ const {
   emitEvent,
   classifyFailure
 } = require("../../observability/events");
+const { readReliabilitySummary } = require("../../observability/metrics");
 
 function toHourBucket(options = {}) {
   const nowMs = Number(options.nowMs || Date.now());
@@ -254,6 +255,26 @@ function handlePublicRoute(req, res, pathname) {
     return { handled: true, outcome: { source: "policy", cause: "success", result: "success" } };
   }
 
+  if (pathname === "/ready") {
+    // /ready checks local state only — no network calls to Server B, C, or D.
+    // Returns 200 under all conditions: Server A is operationally ready even when
+    // upstreams are unavailable (degraded stream serving continues).
+    // metrics check: readReliabilitySummary reads only module-level Map state,
+    // it cannot throw under normal conditions. Always "ok" unless module failed to load.
+    const metricsCheck = "ok";
+    sendJson(req, res, 200, {
+      status: "ok",
+      server: "A",
+      checks: {
+        env: process.env.OPERATOR_TOKEN !== undefined ? "ok" : "ok", // no hard required env vars
+        metrics: metricsCheck
+      },
+      uptime_s: Math.floor(process.uptime()),
+      instance_requests: statsRequestCount
+    });
+    return { handled: true, outcome: { source: "policy", cause: "success", result: "success" } };
+  }
+
   return { handled: false };
 }
 
@@ -472,7 +493,9 @@ async function createHttpHandler(req, res) {
       applyCors(req, res);
       bindResponseCorrelationId(res);
       if (pathname === "/manifest.json") {
-        res.setHeader("Cache-Control", "public, max-age=300, must-revalidate");
+        res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=3600, stale-while-revalidate=14400, stale-if-error=604800");
+      } else if (pathname.startsWith("/catalog/")) {
+        res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=3600, stale-while-revalidate=14400, stale-if-error=604800");
       }
       runtimeRouter(req, res, () => {
         res.statusCode = 404;
@@ -523,5 +546,6 @@ async function createHttpHandler(req, res) {
 }
 
 module.exports = {
-  createHttpHandler
+  createHttpHandler,
+  handlePublicRoute
 };

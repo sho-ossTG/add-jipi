@@ -88,19 +88,46 @@ function decodeField(field) {
   return normalizeLabels(decoded);
 }
 
+// In-memory reliability counter store.
+// State is per-instance and resets on cold start — this is accepted behavior.
+// Counter increments are safe without locks: Node.js is single-threaded (no
+// preemption between read and write even under Fluid Compute in-process concurrency).
+// The _redisCommand first parameter is vestigial from an original Redis design;
+// it is ignored here but kept for forward-compat if Redis persistence is added later.
+const _counters = new Map();
+
 async function incrementReliabilityCounter(_redisCommand, labels = {}) {
-  return normalizeLabels(labels);
+  const normalized = normalizeLabels(labels);
+  const key = encodeField(normalized);
+  _counters.set(key, (_counters.get(key) || 0) + 1);
+  return normalized;
 }
 
 async function readReliabilitySummary(_redisCommand) {
+  const metrics = [];
+  let overall = 0, success = 0, degraded = 0, failure = 0;
+  const bySource = {}, byCause = {}, byRouteClass = {};
+
+  for (const [key, count] of _counters) {
+    const labels = decodeField(key);
+    metrics.push({ ...labels, count });
+    overall += count;
+    if (labels.result === "success") success += count;
+    if (labels.result === "degraded") degraded += count;
+    if (labels.result === "failure") failure += count;
+    bySource[labels.source] = (bySource[labels.source] || 0) + count;
+    byCause[labels.cause] = (byCause[labels.cause] || 0) + count;
+    byRouteClass[labels.routeClass] = (byRouteClass[labels.routeClass] || 0) + count;
+  }
+
   return {
     dimensions: BOUNDED_DIMENSIONS,
-    totals: { success: 0, degraded: 0, failure: 0, overall: 0 },
-    bySource: {},
-    byCause: {},
-    byRouteClass: {},
-    metrics: [],
-    lastUpdated: null
+    totals: { success, degraded, failure, overall },
+    bySource,
+    byCause,
+    byRouteClass,
+    metrics,
+    lastUpdated: overall > 0 ? new Date().toISOString() : null
   };
 }
 
