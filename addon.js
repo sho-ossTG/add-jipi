@@ -1,11 +1,12 @@
 const { addonBuilder } = require("stremio-addon-sdk");
 const { createDClient } = require("./modules/integrations/d-client");
+const packageVersion = require("./package.json").version;
 
 const IMDB_ID = "tt0388629";
 
 const manifest = {
   id: "org.jipi.onepiece",
-  version: "1.0.0",
+  version: packageVersion,
   name: "One Piece (Jipi)",
   description: "JIPI NAKAMA ANIMEISREAL ",
   logo: "https://www.stickitup.xyz/cdn/shop/products/one-piece-logo-sticker-4857715.jpg?v=1771245370",
@@ -13,7 +14,10 @@ const manifest = {
   resources: ["catalog", "stream"],
   types: ["series"],
   catalogs: [{ type: "series", id: "onepiece_catalog", name: "One Piece" }],
-  idPrefixes: [IMDB_ID]
+  idPrefixes: [IMDB_ID],
+  behaviorHints: {
+    configurationRequired: false
+  }
 };
 
 const builder = new addonBuilder(manifest);
