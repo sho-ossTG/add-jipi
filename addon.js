@@ -1,5 +1,6 @@
 const { addonBuilder } = require("stremio-addon-sdk");
 const { createDClient } = require("./modules/integrations/d-client");
+const { normalizeAndClassifyStreamUrl } = require("./modules/presentation/stream-payloads");
 const packageVersion = require("./package.json").version;
 
 const IMDB_ID = "tt0388629";
@@ -56,25 +57,17 @@ builder.defineStreamHandler(async (args) => {
 
   try {
     const resolved = await resolveEpisode(streamId);
+    const urlInfo = normalizeAndClassifyStreamUrl(resolved.url);
+    if (!urlInfo.isWebReady) {
+      return { streams: [] };
+    }
 
-    const rawUrl = typeof resolved.url === "string"
-      ? resolved.url.replace(/^http:\/\//, "https://")
-      : "";
-    const finalUrl = (() => {
-      try {
-        const u = new URL(rawUrl);
-        u.searchParams.delete("range");
-        return u.toString();
-      } catch {
-        return rawUrl;
-      }
-    })();
     return {
       streams: [
         {
           name: "Jipi",
           description: resolved.title,
-          url: finalUrl,
+          url: urlInfo.url,
           behaviorHints: {
             notWebReady: false,
             bingeGroup: "jipi",

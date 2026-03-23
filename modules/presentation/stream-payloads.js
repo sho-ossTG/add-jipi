@@ -1,10 +1,51 @@
+function normalizeAndClassifyStreamUrl(rawUrl) {
+  const asString = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  const normalizedInput = asString;
+
+  try {
+    const parsed = new URL(normalizedInput);
+    parsed.searchParams.delete("range");
+
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return { url: parsed.toString(), isWebReady: false };
+    }
+
+    const decodedMime = decodeURIComponent(parsed.searchParams.get("mime") || "").toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    const normalizedUrl = parsed.toString();
+
+    if (decodedMime.includes("video/webm") || decodedMime.includes("audio/webm")) {
+      return { url: normalizedUrl, isWebReady: false };
+    }
+
+    if (pathname.endsWith(".m3u8") || pathname.endsWith(".webm")) {
+      return { url: normalizedUrl, isWebReady: false };
+    }
+
+    if (decodedMime) {
+      const webReadyMime = decodedMime.includes("video/mp4") || decodedMime.includes("audio/mp4");
+      return { url: normalizedUrl, isWebReady: webReadyMime };
+    }
+
+    const webReadyPath = pathname.endsWith(".mp4") || pathname.endsWith(".m4v") || pathname.endsWith(".m4a");
+    return { url: normalizedUrl, isWebReady: webReadyPath };
+  } catch {
+    return { url: normalizedInput, isWebReady: false };
+  }
+}
+
+function isWebReadyStreamUrl(rawUrl) {
+  return normalizeAndClassifyStreamUrl(rawUrl).isWebReady;
+}
+
 function formatStream(description, url, options = {}) {
-  const hints = { notWebReady: false, bingeGroup: "jipi" };
+  const classified = normalizeAndClassifyStreamUrl(url);
+  const hints = { notWebReady: !classified.isWebReady, bingeGroup: "jipi" };
   if (options.filename) hints.filename = options.filename;
   return {
     name: "Jipi",
     description,
-    url,
+    url: classified.url,
     behaviorHints: hints
   };
 }
@@ -98,6 +139,8 @@ function sendDegradedStream(req, res, causeInput, injected = {}) {
 
 module.exports = {
   formatStream,
+  normalizeAndClassifyStreamUrl,
+  isWebReadyStreamUrl,
   buildDegradedStreamPayload,
   sendDegradedStream
 };

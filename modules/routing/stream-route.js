@@ -43,17 +43,6 @@ function resolveForwardUserAgent(injected = {}) {
   return dClient.forwardUserAgent.bind(dClient);
 }
 
-function normalizeStreamUrl(rawUrl) {
-  const base = typeof rawUrl === "string" ? rawUrl.replace(/^http:\/\//, "https://") : "";
-  try {
-    const u = new URL(base);
-    u.searchParams.delete("range");
-    return u.toString();
-  } catch {
-    return base;
-  }
-}
-
 async function handleStreamRequest(input = {}, injected = {}) {
   const req = input.req;
   const res = input.res;
@@ -93,6 +82,15 @@ async function handleStreamRequest(input = {}, injected = {}) {
   }
 
   if (cached.hit) {
+    const classifyUrl = injected.normalizeAndClassifyStreamUrl
+      || streamPayloads.normalizeAndClassifyStreamUrl;
+    const cachedUrlInfo = classifyUrl(cached.value.finalUrl);
+    if (!cachedUrlInfo.isWebReady) {
+      streamCache.setNegative(episodeId);
+      sendDegradedStream(req, res, "validation_invalid_stream_url", injected);
+      return { handled: true, outcome: { source: "cache", cause: "cache_invalid_stream_url", result: "degraded" } };
+    }
+
     const formatStreamLocal = injected.formatStream || streamPayloads.formatStream;
     if (res && typeof res.setHeader === "function") {
       res.setHeader("Cache-Control", STREAM_CACHE_CONTROL);
@@ -106,9 +104,11 @@ async function handleStreamRequest(input = {}, injected = {}) {
       Promise.resolve()
         .then(() => resolveForSwr(episodeId))
         .then((refreshed) => {
-          const refreshFinalUrl = normalizeStreamUrl(refreshed.url);
-          if (refreshFinalUrl.startsWith("https://")) {
-            streamCache.set(episodeId, { title: refreshed.title, finalUrl: refreshFinalUrl });
+          const classifyRefreshedUrl = injected.normalizeAndClassifyStreamUrl
+            || streamPayloads.normalizeAndClassifyStreamUrl;
+          const refreshedUrlInfo = classifyRefreshedUrl(refreshed.url);
+          if (refreshedUrlInfo.isWebReady) {
+            streamCache.set(episodeId, { title: refreshed.title, finalUrl: refreshedUrlInfo.url });
           }
         })
         .catch(() => { /* keep stale, no eviction */ });
@@ -138,11 +138,14 @@ async function handleStreamRequest(input = {}, injected = {}) {
 
     const resolveEpisode = resolveEpisodeResolver(streamInjected);
     const resolved = await guard.execute(episodeId, () => resolveEpisode(episodeId));
-    const finalUrl = normalizeStreamUrl(resolved.url);
+    const classifyUrl = injected.normalizeAndClassifyStreamUrl
+      || streamPayloads.normalizeAndClassifyStreamUrl;
+    const resolvedUrlInfo = classifyUrl(resolved.url);
+    const finalUrl = resolvedUrlInfo.url;
 
-    if (!finalUrl.startsWith("https://")) {
+    if (!resolvedUrlInfo.isWebReady) {
       const validationLabels = { source: 'validation', cause: 'validation_invalid_stream_url', routeClass: 'stremio', result: 'degraded' };
-      emitEvent(logger, EVENTS.DEPENDENCY_FAILURE, { ...validationLabels, episodeId, detail: 'Resolved URL was empty or non-HTTPS' });
+      emitEvent(logger, EVENTS.DEPENDENCY_FAILURE, { ...validationLabels, episodeId, detail: 'Resolved URL is not web-ready' });
       await incrementReliabilityCounter(null, validationLabels);
       streamCache.setNegative(episodeId);
       sendDegradedStream(req, res, "validation_invalid_stream_url", injected);
